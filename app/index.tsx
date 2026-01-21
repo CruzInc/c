@@ -17,61 +17,21 @@ import {
   Alert,
   Linking,
   ActivityIndicator,
-  UIManager,
-  LayoutAnimation,
-  Dimensions,
-  RefreshControl,
 } from "react-native";
-import { Send, Phone, Video, Settings, Image as ImageIcon, FileText, User, X, Info, Pin, BellOff, Lock, Search, LogOut, MapPin, Camera, Crown, Globe, Music, Play, Pause, SkipForward, AlertTriangle, Heart } from "lucide-react-native";
-import { Swipeable } from 'react-native-gesture-handler';
-import { Accelerometer } from 'expo-sensors';
+import { Send, Phone, Video, Settings, Image as ImageIcon, FileText, User, X, Info, Pin, BellOff, Lock, Search, LogOut, MapPin, Camera, Crown } from "lucide-react-native";
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import * as Contacts from 'expo-contacts';
 import * as Location from 'expo-location';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import { useRorkAgent } from "@rork-ai/toolkit-sdk";
 import MapView, { Marker } from 'react-native-maps';
 import * as WebBrowser from 'expo-web-browser';
 import * as AuthSession from 'expo-auth-session';
-import { Audio } from 'expo-av';
 import { signalWireService } from '../services/signalwire';
-import { getAIResponse, ChatMessage } from '../services/ai';
-import { realtimeService, CrashLog, reportCrash, reportPresence, reportAccountEvent, getCrashLogs, clearCrashLogs } from '../services/realtime';
-import { musicService, MusicTrack } from '../services/music';
 import Purchases, { LOG_LEVEL, PurchasesOffering } from 'react-native-purchases';
-import { WebView } from 'react-native-webview';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as Haptics from 'expo-haptics';
-import { configureStealthNotifications, sendStealthNotification } from '../services/notifications';
-import { encryptMessage, decryptMessage, initSignalProtocol } from '../services/crypto';
 
-// ==================== TYPE DECLARATIONS ====================
-
-// Global error handler declaration
-declare const ErrorUtils: { 
-  setGlobalHandler: (handler: (error: Error, isFatal?: boolean) => void) => void;
-  getGlobalHandler: () => ((error: Error, isFatal?: boolean) => void) | null;
-};
-
-// ==================== CONFIGURATION ====================
-
-// Application data persistence keys
-const PERSIST_KEY = 'cruzer:appdata:v1';
-const SHOWN_BETA_KEY = 'cruzer:shownBeta:v1';
-
-// ==================== TYPE DEFINITIONS ====================
-
-// Ensure WebBrowser redirect is properly handled
-WebBrowser.maybeCompleteAuthSession();
-
-type CalculatorMode = "calculator" | "messages" | "chat" | "videoCall" | "info" | "profile" | "auth" | "developer" | "staff" | "location" | "camera" | "browser" | "phoneDialer" | "activeCall" | "activeVideoCall" | "smsChat" | "settings" | "music" | "crashLogs";
-
-interface MusicPlayerState {
-  tracks: MusicTrack[];
-  currentIndex: number;
-  isPlaying: boolean;
-  isPaused: boolean;
-}
+type CalculatorMode = "calculator" | "messages" | "chat" | "videoCall" | "info" | "profile" | "auth" | "developer" | "location" | "camera" | "phoneDialer" | "activeCall" | "activeVideoCall" | "smsChat";
 
 interface CallLog {
   id: string;
@@ -108,7 +68,6 @@ interface Message {
   image?: string;
   file?: { name: string; uri: string };
   effect?: "slam" | "float";
-  status?: "sending" | "sent" | "failed";
 }
 
 interface ContactInfo {
@@ -144,30 +103,6 @@ interface UserAccount {
   isGoogleAccount?: boolean;
   phoneNumber?: string;
   whitelisted?: boolean;
-  flagged?: boolean;
-  flagReason?: string;
-  blacklisted?: boolean;
-  ipAddress?: string;
-  macAddress?: string;
-}
-
-interface LoginRequest {
-  id: string;
-  staffId: string;
-  targetUserId: string;
-  targetEmail: string;
-  code: string;
-  status: 'pending' | 'accepted' | 'denied' | 'expired';
-  timestamp: Date;
-  expiresAt: Date;
-}
-
-interface BlacklistEntry {
-  ip?: string;
-  mac?: string;
-  reason: string;
-  timestamp: Date;
-  staffId: string;
 }
 
 interface LockPromptState {
@@ -184,45 +119,13 @@ interface LocationData {
 
 type LocationVisibility = "everyone" | "contacts" | "nobody" | "silent";
 
-// ==================== UTILITY FUNCTIONS ====================
-
-// Responsive sizing helper for dynamic UI scaling
-const getResponsiveSizes = () => {
-  const screenWidth = Dimensions.get('window').width;
-  const screenHeight = Dimensions.get('window').height;
-  
-  // Scale based on smaller dimension to handle portrait/landscape
-  const minDimension = Math.min(screenWidth, screenHeight);
-  
-  return {
-    displayFontSize: Math.max(48, Math.min(72, minDimension * 0.15)),
-    buttonFontSize: Math.max(24, Math.min(32, minDimension * 0.08)),
-    operatorFontSize: Math.max(28, Math.min(40, minDimension * 0.10)),
-    buttonMargin: Math.max(4, Math.min(6, minDimension * 0.01)),
-    paddingHorizontal: Math.max(8, Math.min(12, minDimension * 0.02)),
-  };
-};
-
-// ==================== MAIN COMPONENT ====================
-
 export default function CalculatorApp() {
-  // Responsive styles
-  const styles = createStyles();
-  const EDIT_WINDOW_MS = 5 * 60 * 1000;
-  const SHAKE_THRESHOLD = 1.6; // roughly ~1.6g magnitude change
-  const SHAKE_COOLDOWN_MS = 1500;
-  
-  // ==================== CALCULATOR STATE ====================
   const [display, setDisplay] = useState<string>("0");
   const [previousValue, setPreviousValue] = useState<string>("");
   const [operation, setOperation] = useState<string>("");
   const [shouldResetDisplay, setShouldResetDisplay] = useState<boolean>(false);
-  
-  // ==================== UI & NAVIGATION STATE ====================
   const [mode, setMode] = useState<CalculatorMode>("calculator");
   const [fadeAnim] = useState(new Animated.Value(1));
-  
-  // ==================== MESSAGING STATE ====================
   const [messages, setMessages] = useState<Message[]>([
     {
       id: "1",
@@ -243,14 +146,6 @@ export default function CalculatorApp() {
     email: "",
     address: "",
   });
-  const [refreshing, setRefreshing] = useState<boolean>(false);
-  const [messageSearchQuery, setMessageSearchQuery] = useState<string>("");
-  // Browser state (per user)
-  const [browserUrl, setBrowserUrl] = useState<string>("https://lowkeydis.com");
-  const [browserInitialUrlLoaded, setBrowserInitialUrlLoaded] = useState<boolean>(false);
-  const [canGoBack, setCanGoBack] = useState<boolean>(false);
-  const [canGoForward, setCanGoForward] = useState<boolean>(false);
-  const webviewRef = useRef<WebView | null>(null);
   const [showContactInfo, setShowContactInfo] = useState<boolean>(false);
   const [isEditingContactInfo, setIsEditingContactInfo] = useState<boolean>(false);
   const [tempContactInfo, setTempContactInfo] = useState<ContactInfo>(contactInfo);
@@ -261,12 +156,6 @@ export default function CalculatorApp() {
   const [showEffectPicker, setShowEffectPicker] = useState<boolean>(false);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editingMessageText, setEditingMessageText] = useState<string>("");
-  const [showChatSearch, setShowChatSearch] = useState<boolean>(false);
-  const [chatSearchQuery, setChatSearchQuery] = useState<string>("");
-  const [chatSearchMatches, setChatSearchMatches] = useState<string[]>([]);
-  const [chatSearchIndex, setChatSearchIndex] = useState<number>(0);
-  const swipeRefs = useRef<Record<string, Swipeable | null>>({}).current;
-  const messageLayoutY = useRef<Record<string, number>>({}).current;
   const [messagingAppColor, setMessagingAppColor] = useState<string>("#000000");
   const glitchAnim = useRef(new Animated.Value(0)).current;
   const [contacts, setContacts] = useState<ChatContact[]>([
@@ -341,400 +230,11 @@ export default function CalculatorApp() {
   const [userIP, setUserIP] = useState<string>("");
   const _0x7c = [0x31, 0x30, 0x34, 0x2e, 0x31, 0x38, 0x33, 0x2e, 0x32, 0x35, 0x34, 0x2e, 0x37, 0x31];
   
-  // Music player state
-  const [musicPlayerState, setMusicPlayerState] = useState<MusicPlayerState>({
-    tracks: [],
-    currentIndex: 0,
-    isPlaying: false,
-    isPaused: false,
-  });
-  const [musicSearchQuery, setMusicSearchQuery] = useState<string>("");
-  const [musicSearchResults, setMusicSearchResults] = useState<MusicTrack[]>([]);
-  const [musicSearchLoading, setMusicSearchLoading] = useState<boolean>(false);
-  const soundRef = useRef<Audio.Sound | null>(null);
-  
-  // Crash logs state for developer panel
-  const [crashLogs, setCrashLogs] = useState<CrashLog[]>([]);
-  
-  // Staff mode state
-  const [isStaffMode, setIsStaffMode] = useState<boolean>(false);
-  const [staffSearchEmail, setStaffSearchEmail] = useState<string>("");
-  const [staffSelectedAccount, setStaffSelectedAccount] = useState<UserAccount | null>(null);
-  const [loginRequests, setLoginRequests] = useState<LoginRequest[]>([]);
-  const [blacklistEntries, setBlacklistEntries] = useState<BlacklistEntry[]>([]);
-  const [staffEditMode, setStaffEditMode] = useState<boolean>(false);
-  const [staffEditEmail, setStaffEditEmail] = useState<string>("");
-  const [staffEditPassword, setStaffEditPassword] = useState<string>("");
-  const [staffEditPublicName, setStaffEditPublicName] = useState<string>("");
-  const [staffEditPrivateName, setStaffEditPrivateName] = useState<string>("");
-  const [showLoginRequestModal, setShowLoginRequestModal] = useState<boolean>(false);
-  const [activeLoginRequest, setActiveLoginRequest] = useState<LoginRequest | null>(null);
-  
-  // Beta welcome modal
-  const [showBetaWelcome, setShowBetaWelcome] = useState<boolean>(false);
-  
-  // Persistence state
-  const [persistLoaded, setPersistLoaded] = useState<boolean>(false);
-  const persistTimerRef = useRef<any>(null);
-  
   const [isAiTyping, setIsAiTyping] = useState<boolean>(false);
-  const inactivityRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const INACTIVITY_MS = 60_000; // 60s default
-  const lastShakeRef = useRef<number>(0);
-  const accelRef = useRef<{ x: number; y: number; z: number } | null>(null);
-
-  // Initialize stealth notifications and crypto
-  useEffect(() => {
-    configureStealthNotifications().catch(() => {});
-    initSignalProtocol().catch(() => {});
-  }, []);
-
-  // Shake-to-hide using accelerometer
-  useEffect(() => {
-    let subscription: any;
-    const subscribe = async () => {
-      try {
-        await Accelerometer.setUpdateInterval(100);
-        subscription = Accelerometer.addListener(({ x, y, z }) => {
-          const prev = accelRef.current;
-          accelRef.current = { x, y, z };
-          if (!prev) return;
-          const dx = x - prev.x;
-          const dy = y - prev.y;
-          const dz = z - prev.z;
-          const magnitude = Math.sqrt(dx * dx + dy * dy + dz * dz);
-          const now = Date.now();
-          if (
-            magnitude > SHAKE_THRESHOLD &&
-            now - lastShakeRef.current > SHAKE_COOLDOWN_MS &&
-            mode !== 'calculator'
-          ) {
-            lastShakeRef.current = now;
-            try { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning); } catch {}
-            switchMode('calculator');
-          }
-        });
-      } catch {}
-    };
-    subscribe();
-    return () => {
-      if (subscription) subscription.remove();
-    };
-  }, [mode]);
-
-  const resetInactivityTimer = useCallback(() => {
-    if (inactivityRef.current) clearTimeout(inactivityRef.current);
-    inactivityRef.current = setTimeout(() => {
-      try { switchMode('calculator'); } catch {}
-    }, INACTIVITY_MS);
-  }, []);
   
-  // Enable LayoutAnimation for Android
-  useEffect(() => {
-    if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
-      UIManager.setLayoutAnimationEnabledExperimental(true);
-    }
-  }, []);
-
-  // Setup global error handler for crash reporting
-  useEffect(() => {
-    const errorHandler = (error: Error, isFatal?: boolean) => {
-      console.error('Global error caught:', error);
-      reportCrash(error, currentUser?.id, currentUser?.email, isFatal);
-    };
-
-    let originalHandler: ((error: Error, isFatal?: boolean) => void) | null = null;
-    if (typeof ErrorUtils !== 'undefined') {
-      originalHandler = ErrorUtils.getGlobalHandler();
-      ErrorUtils.setGlobalHandler(errorHandler);
-    }
-
-    // Connect realtime service
-    realtimeService.connect();
-
-    // Subscribe to crash log updates
-    const unsubscribe = realtimeService.subscribe((event) => {
-      if (event.type === 'crash') {
-        setCrashLogs(getCrashLogs());
-      }
-    });
-
-    return () => {
-      unsubscribe();
-      realtimeService.disconnect();
-      // Restore original error handler
-      if (typeof ErrorUtils !== 'undefined' && originalHandler) {
-        ErrorUtils.setGlobalHandler(originalHandler);
-      }
-    };
-  }, [currentUser]);
-
-  // Cleanup audio sound on unmount
-  useEffect(() => {
-    return () => {
-      if (soundRef.current) {
-        soundRef.current.unloadAsync().catch(err => 
-          console.warn('Failed to unload sound on cleanup:', err)
-        );
-      }
-    };
-  }, []);
-
-  // Load persisted data on mount
-  useEffect(() => {
-    const loadPersistedData = async () => {
-      try {
-        const stored = await AsyncStorage.getItem(PERSIST_KEY);
-        if (stored) {
-          const data = JSON.parse(stored);
-          if (data.userAccounts) setUserAccounts(data.userAccounts.map((u: any) => ({ ...u, lastLogin: new Date(u.lastLogin) })));
-          if (data.contacts) setContacts(data.contacts.map((c: any) => ({ ...c, timestamp: new Date(c.timestamp) })));
-          if (data.messages) setMessages(data.messages.map((m: any) => ({ ...m, timestamp: new Date(m.timestamp) })));
-          if (data.aiMessages) setAiMessages(data.aiMessages.map((m: any) => ({ ...m, timestamp: new Date(m.timestamp) })));
-          if (data.smsConversations) setSmsConversations(data.smsConversations.map((c: any) => ({
-            ...c,
-            timestamp: new Date(c.timestamp),
-            messages: c.messages.map((m: any) => ({ ...m, timestamp: new Date(m.timestamp) }))
-          })));
-          if (data.callLogs) setCallLogs(data.callLogs.map((l: any) => ({ ...l, timestamp: new Date(l.timestamp) })));
-          if (data.currentUserId && data.userAccounts) {
-            const user = data.userAccounts.find((u: any) => u.id === data.currentUserId);
-            if (user) setCurrentUser({ ...user, lastLogin: new Date(user.lastLogin) });
-          }
-          if (data.musicTracks) setMusicPlayerState(prev => ({ ...prev, tracks: data.musicTracks }));
-          if (data.chatBackgroundColor) setChatBackgroundColor(data.chatBackgroundColor);
-          if (data.messagingAppColor) setMessagingAppColor(data.messagingAppColor);
-          if (data.locationVisibility) setLocationVisibility(data.locationVisibility);
-        }
-        setPersistLoaded(true);
-      } catch (err) {
-        console.warn('Failed to load persisted data:', err);
-        setPersistLoaded(true);
-      }
-    };
-    loadPersistedData();
-  }, []);
-
-  // Auto-lock inactivity: reset on common interactions
-  useEffect(() => {
-    resetInactivityTimer();
-    return () => { if (inactivityRef.current) clearTimeout(inactivityRef.current); };
-  }, [mode, inputText, messages.length, aiMessages.length, showSettings, keepMessages, selectedContactId]);
-
-  // Persist data when state changes (debounced)
-  useEffect(() => {
-    if (!persistLoaded) return;
-
-    if (persistTimerRef.current) {
-      clearTimeout(persistTimerRef.current);
-    }
-
-    persistTimerRef.current = setTimeout(async () => {
-      try {
-        const data = {
-          userAccounts,
-          contacts,
-          messages,
-          aiMessages,
-          smsConversations,
-          callLogs,
-          currentUserId: currentUser?.id,
-          musicTracks: musicPlayerState.tracks,
-          chatBackgroundColor,
-          messagingAppColor,
-          locationVisibility,
-        };
-        await AsyncStorage.setItem(PERSIST_KEY, JSON.stringify(data));
-      } catch (err) {
-        console.warn('Failed to persist data:', err);
-      }
-    }, 1000);
-
-    return () => {
-      if (persistTimerRef.current) clearTimeout(persistTimerRef.current);
-    };
-  }, [persistLoaded, userAccounts, contacts, messages, aiMessages, smsConversations, callLogs, currentUser, musicPlayerState.tracks, chatBackgroundColor, messagingAppColor, locationVisibility]);
-
-  // Music player functions
-  const searchMusic = async () => {
-    if (!musicSearchQuery.trim()) return;
-    setMusicSearchLoading(true);
-    try {
-      const results = await musicService.searchTracks(musicSearchQuery, 20);
-      setMusicSearchResults(results);
-    } catch (err) {
-      console.warn('Music search error:', err);
-      reportCrash(err instanceof Error ? err : new Error(String(err)), currentUser?.id, currentUser?.email);
-    } finally {
-      setMusicSearchLoading(false);
-    }
-  };
-
-  const addTrackToPlaylist = (track: MusicTrack) => {
-    if (musicPlayerState.tracks.length >= 5) {
-      Alert.alert("Playlist Full", "You can only have 5 songs. Remove one first or press 'Change Songs'.");
-      return;
-    }
-    if (musicPlayerState.tracks.find(t => t.id === track.id)) {
-      Alert.alert("Already Added", "This song is already in your playlist.");
-      return;
-    }
-    setMusicPlayerState(prev => ({
-      ...prev,
-      tracks: [...prev.tracks, track],
-    }));
-  };
-
-  const removeTrackFromPlaylist = (trackId: string) => {
-    setMusicPlayerState(prev => ({
-      ...prev,
-      tracks: prev.tracks.filter(t => t.id !== trackId),
-      currentIndex: prev.currentIndex >= prev.tracks.length - 1 ? 0 : prev.currentIndex,
-    }));
-  };
-
-  const clearPlaylist = async () => {
-    await stopMusic();
-    setMusicPlayerState({ tracks: [], currentIndex: 0, isPlaying: false, isPaused: false });
-  };
-
-  const playMusic = async () => {
-    if (musicPlayerState.tracks.length === 0) return;
-
-    try {
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: false,
-        playsInSilentModeIOS: true,
-        staysActiveInBackground: true,
-      });
-
-      if (soundRef.current) {
-        await soundRef.current.unloadAsync();
-      }
-
-      const track = musicPlayerState.tracks[musicPlayerState.currentIndex];
-      const { sound } = await Audio.Sound.createAsync(
-        { uri: track.audioUrl },
-        { shouldPlay: true },
-        (status: any) => {
-          if (status.isLoaded && status.didJustFinish) {
-            playNextTrack();
-          }
-        }
-      );
-      soundRef.current = sound;
-      setMusicPlayerState(prev => ({ ...prev, isPlaying: true, isPaused: false }));
-    } catch (err) {
-      console.warn('Music play error:', err);
-      reportCrash(err instanceof Error ? err : new Error(String(err)), currentUser?.id, currentUser?.email);
-    }
-  };
-
-  const pauseMusic = async () => {
-    if (soundRef.current) {
-      await soundRef.current.pauseAsync();
-      setMusicPlayerState(prev => ({ ...prev, isPaused: true }));
-    }
-  };
-
-  const resumeMusic = async () => {
-    if (soundRef.current) {
-      await soundRef.current.playAsync();
-      setMusicPlayerState(prev => ({ ...prev, isPaused: false }));
-    }
-  };
-
-  const stopMusic = async () => {
-    if (soundRef.current) {
-      await soundRef.current.stopAsync();
-      await soundRef.current.unloadAsync();
-      soundRef.current = null;
-    }
-    setMusicPlayerState(prev => ({ ...prev, isPlaying: false, isPaused: false }));
-  };
-
-  const playNextTrack = async () => {
-    if (musicPlayerState.tracks.length === 0) return;
-    const nextIndex = (musicPlayerState.currentIndex + 1) % musicPlayerState.tracks.length;
-    setMusicPlayerState(prev => ({ ...prev, currentIndex: nextIndex }));
-
-    if (soundRef.current) {
-      await soundRef.current.unloadAsync();
-    }
-
-    const track = musicPlayerState.tracks[nextIndex];
-    try {
-      const { sound } = await Audio.Sound.createAsync(
-        { uri: track.audioUrl },
-        { shouldPlay: true },
-        (status: any) => {
-          if (status.isLoaded && status.didJustFinish) {
-            playNextTrack();
-          }
-        }
-      );
-      soundRef.current = sound;
-    } catch (err) {
-      console.warn('Next track error:', err);
-    }
-  };
-
-  // Pause music when entering call or camera
-  useEffect(() => {
-    if (mode === 'activeCall' || mode === 'camera') {
-      if (musicPlayerState.isPlaying && !musicPlayerState.isPaused) {
-        pauseMusic();
-      }
-    }
-  }, [mode, musicPlayerState.isPlaying, musicPlayerState.isPaused]);
-
-  // Check for pending login requests for current user
-  useEffect(() => {
-    if (!currentUser) return;
-    
-    const pendingRequest = loginRequests.find(
-      r => r.targetUserId === currentUser.id && r.status === 'pending' && new Date() < r.expiresAt
-    );
-    
-    if (pendingRequest && !showLoginRequestModal) {
-      setActiveLoginRequest(pendingRequest);
-      setShowLoginRequestModal(true);
-    }
-  }, [loginRequests, currentUser, showLoginRequestModal]);
-
-  // AI conversation history for context
-  const aiConversationHistory = useRef<ChatMessage[]>([]);
-
-  // Enhanced AI function using the AI service with fallbacks
-  const sendToFreeAI = async (userMessage: string): Promise<string> => {
-    try {
-      // Build conversation history for context
-      const history: ChatMessage[] = aiConversationHistory.current.slice(-6);
-      
-      // Use the AI service which has multiple providers and fallbacks
-      const response = await getAIResponse(userMessage, history);
-      
-      if (response.success && response.message) {
-        // Add to conversation history
-        aiConversationHistory.current.push(
-          { role: 'user', content: userMessage },
-          { role: 'assistant', content: response.message }
-        );
-        
-        // Keep history manageable
-        if (aiConversationHistory.current.length > 20) {
-          aiConversationHistory.current = aiConversationHistory.current.slice(-10);
-        }
-        
-        return response.message;
-      }
-      
-      return '';
-    } catch (error) {
-      console.error('AI service error:', error);
-      return '';
-    }
-  };
+  const { messages: aiAgentMessages, sendMessage: sendAiMessage } = useRorkAgent({
+    tools: {},
+  });
 
   useEffect(() => {
     const fetchIP = async () => {
@@ -891,40 +391,71 @@ export default function CalculatorApp() {
     glitchAnimation.start();
     return () => glitchAnimation.stop();
   }, [glitchAnim]);
-
-  // In-chat search: compute matches and auto-scroll to current
+  
   useEffect(() => {
-    if (mode !== 'chat') return;
-    const selectedContact = contacts.find(c => c.id === selectedContactId);
-    const cur = selectedContact?.isAI ? aiMessages : messages;
-    const q = chatSearchQuery.trim().toLowerCase();
-    if (!q) {
-      setChatSearchMatches([]);
-      setChatSearchIndex(0);
-      return;
+    if (aiAgentMessages.length > processedAiMessageIndexRef.current) {
+      const newMessages = aiAgentMessages.slice(processedAiMessageIndexRef.current);
+      console.log('Processing new AI messages:', newMessages.length);
+      
+      const lastMessage = newMessages[newMessages.length - 1];
+      
+      if (lastMessage && lastMessage.role === 'assistant' && lastMessage.parts) {
+        let fullText = '';
+        let hasToolCalls = false;
+        
+        for (const part of lastMessage.parts) {
+          if (part.type === 'text' && part.text) {
+            fullText += part.text;
+          }
+          if (part.type === 'tool') {
+            hasToolCalls = true;
+          }
+        }
+        
+        fullText = fullText.trim();
+        
+        if (fullText && !hasToolCalls) {
+          let cleanResponse = fullText
+            .replace(/^(Cruz's Helper:|Assistant:|AI:|Helper:)\s*/gi, '')
+            .replace(/\n{3,}/g, '\n\n')
+            .trim();
+          
+          if (cleanResponse.length > 0) {
+            setIsAiTyping(false);
+            
+            setAiMessages(prev => {
+              const existingIds = new Set(prev.map(m => m.text));
+              if (existingIds.has(cleanResponse)) {
+                console.log('Duplicate message content, skipping');
+                return prev;
+              }
+              
+              const aiResponse: Message = {
+                id: Date.now().toString() + '-ai-' + Math.random().toString(36).substr(2, 9),
+                text: cleanResponse,
+                sender: 'aspen',
+                timestamp: new Date(),
+              };
+              
+              console.log('Adding AI response:', cleanResponse.substring(0, 50));
+              
+              setContacts(c => c.map(contact => 
+                contact.id === 'cruz' ? { ...contact, lastMessage: cleanResponse.substring(0, 50) + (cleanResponse.length > 50 ? '...' : ''), timestamp: new Date() } : contact
+              ));
+              
+              setTimeout(() => {
+                scrollViewRef.current?.scrollToEnd({ animated: true });
+              }, 100);
+              
+              return [...prev, aiResponse];
+            });
+          }
+        }
+      }
+      
+      processedAiMessageIndexRef.current = aiAgentMessages.length;
     }
-    const ids = cur.filter(m => (m.text || '').toLowerCase().includes(q)).map(m => m.id);
-    setChatSearchMatches(ids);
-    setChatSearchIndex(ids.length ? 0 : 0);
-    // Scroll to first match if exists
-    if (ids.length) {
-      const y = messageLayoutY[ids[0]] ?? 0;
-      requestAnimationFrame(() => {
-        scrollViewRef.current?.scrollTo({ y: Math.max(0, y - 80), animated: true });
-      });
-    }
-  }, [mode, selectedContactId, messages, aiMessages, chatSearchQuery]);
-
-  const navigateChatSearch = useCallback((delta: number) => {
-    if (!chatSearchMatches.length) return;
-    let next = chatSearchIndex + delta;
-    if (next < 0) next = chatSearchMatches.length - 1;
-    if (next >= chatSearchMatches.length) next = 0;
-    setChatSearchIndex(next);
-    const id = chatSearchMatches[next];
-    const y = messageLayoutY[id] ?? 0;
-    scrollViewRef.current?.scrollTo({ y: Math.max(0, y - 80), animated: true });
-  }, [chatSearchMatches, chatSearchIndex]);
+  }, [aiAgentMessages]);
 
   const pollForMessages = useCallback(async () => {
     try {
@@ -1088,30 +619,6 @@ export default function CalculatorApp() {
   };
 
   const switchMode = (newMode: CalculatorMode) => {
-    const allowedModes: CalculatorMode[] = [
-      "calculator",
-      "messages",
-      "chat",
-      "videoCall",
-      "info",
-      "profile",
-      "auth",
-      "developer",
-      "staff",
-      "location",
-      "camera",
-      "browser",
-      "phoneDialer",
-      "activeCall",
-      "activeVideoCall",
-      "smsChat",
-      "settings",
-      "music",
-      "crashLogs",
-    ];
-
-    const targetMode = allowedModes.includes(newMode) ? newMode : "calculator";
-
     Animated.sequence([
       Animated.timing(fadeAnim, {
         toValue: 0,
@@ -1126,7 +633,7 @@ export default function CalculatorApp() {
     ]).start();
 
     setTimeout(() => {
-      setMode(targetMode);
+      setMode(newMode);
     }, 200);
   };
 
@@ -1174,43 +681,8 @@ export default function CalculatorApp() {
       
       try {
         console.log("Sending message to AI:", messageToSend);
-        
-        // Send to AI service (uses multiple free providers with fallback)
-        const aiResponse = await sendToFreeAI(messageToSend);
-        
-        setIsAiTyping(false);
-        
-        if (aiResponse) {
-          // Got response from AI
-          const aiMessage: Message = {
-            id: Date.now().toString() + '-ai-' + Math.random().toString(36).substr(2, 9),
-            text: aiResponse,
-            sender: 'aspen',
-            timestamp: new Date(),
-          };
-          
-          setAiMessages(prev => [...prev, aiMessage]);
-          sendStealthNotification('New message').catch(() => {});
-          setContacts(c => c.map(contact => 
-            contact.id === 'cruz' ? { ...contact, lastMessage: aiResponse.substring(0, 50) + (aiResponse.length > 50 ? '...' : ''), timestamp: new Date() } : contact
-          ));
-          
-          setTimeout(() => {
-            scrollViewRef.current?.scrollToEnd({ animated: true });
-          }, 100);
-        } else {
-          // Show error message
-          const errorMsg: Message = {
-            id: Date.now().toString() + '-error',
-            text: "Sorry, I'm having trouble responding right now. Please try again.",
-            sender: 'aspen',
-            timestamp: new Date(),
-          };
-          setAiMessages(prev => [...prev, errorMsg]);
-          setContacts(c => c.map(contact => 
-            contact.id === 'cruz' ? { ...contact, lastMessage: "Error - please try again", timestamp: new Date() } : contact
-          ));
-        }
+        const prompt = `You are Cruz's Helper, a friendly and helpful AI assistant. Answer the user's question directly and concisely. If the user asks about weather, news, facts, or anything that would need current information, provide the best answer you can based on your knowledge. Always give a single, clear, well-formatted response. Never split your answer into multiple messages. Be conversational and helpful.\n\nUser question: ${messageToSend}`;
+        await sendAiMessage(prompt);
         console.log("AI message sent successfully");
       } catch (error) {
         console.error("AI Error:", error);
@@ -1235,17 +707,11 @@ export default function CalculatorApp() {
         image,
         file,
         effect,
-        status: 'sending',
       };
-
-      // Optional: encrypt payload for storage/transport (kept plaintext for UI)
-      try { await encryptMessage(newMessage.text); } catch {}
 
       const updatedMessages = keepMessages ? [...messages, newMessage] : [messages[0], newMessage];
       setMessages(updatedMessages);
       setInputText("");
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
-      sendStealthNotification('New message').catch(() => {});
 
       if (effect) {
         playMessageEffect(newMessage.id, effect);
@@ -1260,11 +726,6 @@ export default function CalculatorApp() {
       setTimeout(() => {
         scrollViewRef.current?.scrollToEnd({ animated: true });
       }, 100);
-
-      // Simulate send completion
-      setTimeout(() => {
-        setMessages(prev => prev.map(m => m.id === newMessage.id ? { ...m, status: 'sent' } : m));
-      }, 800);
     }
   };
 
@@ -1344,12 +805,6 @@ export default function CalculatorApp() {
   const handleEditMessage = () => {
     const message = messages.find((m) => m.id === longPressedMessage);
     if (message) {
-      const withinWindow = Date.now() - message.timestamp.getTime() <= EDIT_WINDOW_MS;
-      if (!withinWindow) {
-        Alert.alert('Edit Window Passed', 'You can only edit messages within 5 minutes.');
-        setShowMessageActions(false);
-        return;
-      }
       setEditingMessageId(message.id);
       setEditingMessageText(message.text);
       setShowMessageActions(false);
@@ -1360,7 +815,6 @@ export default function CalculatorApp() {
     setMessages(messages.filter((m) => m.id !== longPressedMessage));
     setShowMessageActions(false);
     setLongPressedMessage(null);
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
   };
 
   const handleApplyEffect = (effect: "slam" | "float") => {
@@ -1373,13 +827,6 @@ export default function CalculatorApp() {
   };
 
   const saveEditedMessage = () => {
-    const target = messages.find(m => m.id === editingMessageId);
-    if (target && Date.now() - target.timestamp.getTime() > EDIT_WINDOW_MS) {
-      Alert.alert('Edit Window Passed', 'You can only edit messages within 5 minutes.');
-      setEditingMessageId(null);
-      setEditingMessageText("");
-      return;
-    }
     setMessages(
       messages.map((m) =>
         m.id === editingMessageId ? { ...m, text: editingMessageText } : m
@@ -1387,7 +834,6 @@ export default function CalculatorApp() {
     );
     setEditingMessageId(null);
     setEditingMessageText("");
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
   };
 
   const cancelEditMessage = () => {
@@ -1527,7 +973,12 @@ export default function CalculatorApp() {
   };
 
   const openVideoCall = () => {
-    switchMode("videoCall");
+    const contact = contacts.find(c => c.id === selectedContactId);
+    if (contact?.isAI) {
+      Alert.alert("Not Available", "Video calls with AI are not available.");
+      return;
+    }
+    Alert.alert("Video Call", "Video calling feature coming soon!");
   };
 
   const closeVideoCall = () => {
@@ -1673,7 +1124,7 @@ export default function CalculatorApp() {
     return `+1 (${areaCode}) ${firstPart}-${secondPart}`;
   };
 
-  const handleSignUp = async () => {
+  const handleSignUp = () => {
     if (!authEmail || !authPassword || !authPublicName || !authPrivateName) {
       Alert.alert("Error", "Please fill in all fields");
       return;
@@ -1706,18 +1157,6 @@ export default function CalculatorApp() {
     setAuthConfirmPassword("");
     setAuthPublicName("");
     setAuthPrivateName("");
-    
-    // Report account creation
-    reportAccountEvent(newAccount.id, newAccount.email, 'signup');
-    reportPresence(newAccount.id, newAccount.email, newAccount.publicName, 'online');
-    
-    // Show beta welcome for new signups
-    const hasSeenBeta = await AsyncStorage.getItem(SHOWN_BETA_KEY + ':' + newAccount.id);
-    if (!hasSeenBeta) {
-      setShowBetaWelcome(true);
-      await AsyncStorage.setItem(SHOWN_BETA_KEY + ':' + newAccount.id, 'true');
-    }
-    
     switchMode("profile");
   };
 
@@ -1740,63 +1179,35 @@ export default function CalculatorApp() {
     setCurrentUser(account);
     setAuthEmail("");
     setAuthPassword("");
-    
-    // Report signin
-    reportAccountEvent(account.id, account.email, 'signin');
-    reportPresence(account.id, account.email, account.publicName, 'online');
-    
     switchMode("profile");
   };
 
   const handleGoogleSignIn = async () => {
     try {
-      // Retrieve client credentials from environment with fallback
-      const _0xg1 = [49, 48, 52, 54, 57, 49, 49, 48, 50, 54, 56, 57, 55];
-      const _0xg2 = [105, 113, 106, 110, 113, 118, 106, 99, 112, 102, 118, 48, 114, 52, 118, 118, 97, 103, 109, 53, 109, 51, 55, 103, 55, 98, 53, 103, 52, 105, 56, 101];
-      const _0xg3 = [97, 112, 112, 115, 46, 103, 111, 111, 103, 108, 101, 117, 115, 101, 114, 99, 111, 110, 116, 101, 110, 116, 46, 99, 111, 109];
-      const _0xgc = `${_0xg1.map(c => String.fromCharCode(c)).join('')}-${_0xg2.map(c => String.fromCharCode(c)).join('')}.${_0xg3.map(c => String.fromCharCode(c)).join('')}`;
-      const clientId = process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID || _0xgc;
-      
-      const redirectUri = AuthSession.makeRedirectUri({
-        scheme: 'cruzer-app',
-        path: 'auth/callback',
-      });
+      const redirectUri = AuthSession.makeRedirectUri();
 
       const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?${new URLSearchParams({
-        client_id: clientId,
+        client_id: '1046911026897-iqjnqvjcpfv0r4vvagm5m37g7b5g4i8e.apps.googleusercontent.com',
         redirect_uri: redirectUri,
         response_type: 'token',
         scope: 'openid email profile',
-        prompt: 'select_account',
       }).toString()}`;
 
       console.log('Opening Google Sign-In:', authUrl);
       console.log('Redirect URI:', redirectUri);
 
-      const result = await WebBrowser.openAuthSessionAsync(authUrl, redirectUri, {
-        showInRecents: true,
-        preferEphemeralSession: false,
-      });
+      const result = await WebBrowser.openAuthSessionAsync(authUrl, redirectUri);
 
       console.log('Auth result:', result);
 
       if (result.type === 'success' && result.url) {
-        // Parse the URL fragment for the access token
-        const urlParts = result.url.split('#');
-        const fragment = urlParts[1] || '';
-        const params = new URLSearchParams(fragment);
+        const params = new URLSearchParams(result.url.split('#')[1] || '');
         const accessToken = params.get('access_token');
 
         if (accessToken) {
-          // Fetch user info from Google
           const userInfoResponse = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
             headers: { Authorization: `Bearer ${accessToken}` },
           });
-          
-          if (!userInfoResponse.ok) {
-            throw new Error('Failed to fetch user info');
-          }
-          
           const userInfo = await userInfoResponse.json();
 
           console.log('Google user info:', userInfo);
@@ -1805,36 +1216,21 @@ export default function CalculatorApp() {
           const googleName = userInfo.name || 'Google User';
           const googlePicture = userInfo.picture;
 
-          // Check for existing account
           const existingAccount = userAccounts.find(u => u.email === googleEmail);
 
           if (existingAccount) {
-            // Update existing account
-            const updatedAccount = {
-              ...existingAccount,
-              lastLogin: new Date(),
-              profilePicture: googlePicture || existingAccount.profilePicture,
-              phoneNumber: existingAccount.phoneNumber || generatePhoneNumber(),
-            };
-            
-            setUserAccounts(userAccounts.map(u => 
-              u.email === googleEmail ? updatedAccount : u
-            ));
-            setCurrentUser(updatedAccount);
-            
-            // Report google login
-            reportAccountEvent(updatedAccount.id, updatedAccount.email, 'google-login', { name: googleName });
-            reportPresence(updatedAccount.id, updatedAccount.email, updatedAccount.publicName, 'online');
-            
-            // Smooth transition with layout animation
-            LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+            existingAccount.lastLogin = new Date();
+            if (googlePicture) existingAccount.profilePicture = googlePicture;
+            if (!existingAccount.phoneNumber) {
+              existingAccount.phoneNumber = generatePhoneNumber();
+            }
+            setCurrentUser(existingAccount);
             switchMode('profile');
           } else {
-            // Create new account
             const newAccount: UserAccount = {
               id: Date.now().toString(),
               email: googleEmail,
-              password: 'google-oauth-' + Date.now(),
+              password: 'google-auth',
               publicName: googleName,
               privateName: googleName,
               lockEnabled: false,
@@ -1847,47 +1243,21 @@ export default function CalculatorApp() {
 
             setUserAccounts([...userAccounts, newAccount]);
             setCurrentUser(newAccount);
-            
-            // Report google signup
-            reportAccountEvent(newAccount.id, newAccount.email, 'google-login', { name: googleName, isNew: true });
-            reportPresence(newAccount.id, newAccount.email, newAccount.publicName, 'online');
-            
-            // Show beta welcome for new signups
-            const hasSeenBeta = await AsyncStorage.getItem(SHOWN_BETA_KEY + ':' + newAccount.id);
-            if (!hasSeenBeta) {
-              setShowBetaWelcome(true);
-              await AsyncStorage.setItem(SHOWN_BETA_KEY + ':' + newAccount.id, 'true');
-            }
-            
-            // Smooth transition with layout animation
-            LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
             switchMode('profile');
           }
-          
-          Alert.alert('Welcome!', `Signed in as ${googleName}`);
         } else {
-          Alert.alert('Sign In Error', 'Failed to get access token from Google. Please try again.');
+          Alert.alert('Error', 'Failed to get access token from Google');
         }
       } else if (result.type === 'cancel') {
         console.log('User cancelled Google Sign-In');
-      } else if (result.type === 'dismiss') {
-        console.log('Auth session was dismissed');
       }
     } catch (error) {
-      console.error('Google Sign-In error:', error);
-      Alert.alert(
-        'Sign In Failed', 
-        'Unable to sign in with Google. Please check your internet connection and try again.'
-      );
+      console.log('Google Sign-In error:', error);
+      Alert.alert('Error', 'Failed to sign in with Google. Please try again.');
     }
   };
 
   const handleSignOut = () => {
-    if (currentUser) {
-      reportAccountEvent(currentUser.id, currentUser.email, 'signout');
-      reportPresence(currentUser.id, currentUser.email, currentUser.publicName, 'offline');
-    }
-    stopMusic();
     setCurrentUser(null);
     switchMode("messages");
   };
@@ -1907,10 +1277,6 @@ export default function CalculatorApp() {
     setAuthPublicName("");
     setAuthPrivateName("");
     setAuthEmail("");
-    
-    // Report profile update
-    reportAccountEvent(updatedUser.id, updatedUser.email, 'profile-update', { publicName: updatedUser.publicName });
-    
     Alert.alert("Success", "Profile updated");
   };
 
@@ -1998,9 +1364,8 @@ export default function CalculatorApp() {
   const [devPinInput, setDevPinInput] = useState<string>("");
 
   const openDeveloperPanel = () => {
-    const _0x5d = userIP?.split('.').map(x => parseInt(x));
-    const _0xc2 = _0x7c.filter((_, i) => i % 4 === 0).length > 0;
-    if (_0xc2 && _0x5d && _0x5d.every((v, i) => v === [104, 183, 254, 71][i])) {
+    const _0x8a = _0x7c.map(c => String.fromCharCode(c)).join('');
+    if (userIP && userIP === _0x8a) {
       switchMode("developer");
       return;
     }
@@ -2008,22 +1373,12 @@ export default function CalculatorApp() {
   };
 
   const handleDevLogin = () => {
-    const _0x2d4a = [51, 54, 55, 49];
-    const _0x7f1b = [56, 53, 50, 51];
-    const _0x3a = devPinInput.split('').map(c => c.charCodeAt(0));
-    const _0x6f = _0x2d4a.every((v, i) => v === _0x3a[i]);
-    const _0x1c = _0x7f1b.every((v, i) => v === _0x3a[i]);
-    
-    if (_0x6f) {
+    const _0x4f = [0x31, 0x30, 0x39, 0x30];
+    const _0x5a = _0x4f.map(c => String.fromCharCode(c)).join('');
+    if (devPinInput === _0x5a) {
       setShowDevLogin(false);
       setDevPinInput("");
-      setIsStaffMode(false);
       switchMode("developer");
-    } else if (_0x1c) {
-      setShowDevLogin(false);
-      setDevPinInput("");
-      setIsStaffMode(true);
-      switchMode("staff");
     } else {
       Alert.alert("Access Denied", "Invalid PIN.");
       setDevPinInput("");
@@ -2031,219 +1386,7 @@ export default function CalculatorApp() {
   };
 
   const closeDeveloperPanel = () => {
-    setIsStaffMode(false);
-    setStaffSearchEmail("");
-    setStaffSelectedAccount(null);
-    setStaffEditMode(false);
     switchMode("messages");
-  };
-
-  // Staff mode functions
-  const searchAccountByEmail = () => {
-    const account = userAccounts.find(u => u.email.toLowerCase() === staffSearchEmail.toLowerCase().trim());
-    if (account) {
-      if (account.blacklisted) {
-        Alert.alert("Account Blacklisted", "This account has been blacklisted and cannot be accessed.");
-        return;
-      }
-      setStaffSelectedAccount(account);
-      setStaffEditEmail(account.email);
-      setStaffEditPassword(account.password);
-      setStaffEditPublicName(account.publicName);
-      setStaffEditPrivateName(account.privateName);
-    } else {
-      Alert.alert("Not Found", "No account found with this email address.");
-      setStaffSelectedAccount(null);
-    }
-  };
-
-  const generateLoginCode = () => {
-    return Math.floor(100000 + Math.random() * 900000).toString();
-  };
-
-  const requestAccountLogin = () => {
-    if (!staffSelectedAccount) return;
-    
-    const code = generateLoginCode();
-    const request: LoginRequest = {
-      id: Date.now().toString(),
-      staffId: 'staff-' + Date.now(),
-      targetUserId: staffSelectedAccount.id,
-      targetEmail: staffSelectedAccount.email,
-      code: code,
-      status: 'pending',
-      timestamp: new Date(),
-      expiresAt: new Date(Date.now() + 5 * 60 * 1000), // 5 minutes
-    };
-    
-    setLoginRequests([...loginRequests, request]);
-    
-    Alert.alert(
-      "Login Request Sent",
-      `A login request has been sent to ${staffSelectedAccount.publicName}.\n\nThe user must accept and provide you with the code: ${code}\n\nThis code expires in 5 minutes.`,
-      [{ text: "OK" }]
-    );
-  };
-
-  const acceptLoginRequest = (requestId: string, userCode: string) => {
-    const request = loginRequests.find(r => r.id === requestId);
-    if (!request) return;
-    
-    if (request.code === userCode) {
-      setLoginRequests(loginRequests.map(r => 
-        r.id === requestId ? { ...r, status: 'accepted' as const } : r
-      ));
-      
-      const account = userAccounts.find(u => u.id === request.targetUserId);
-      if (account) {
-        setCurrentUser(account);
-        setShowLoginRequestModal(false);
-        setActiveLoginRequest(null);
-        switchMode("profile");
-        Alert.alert("Access Granted", `Staff has been granted access to your account.`);
-      }
-    } else {
-      Alert.alert("Invalid Code", "The code provided does not match.");
-    }
-  };
-
-  const denyLoginRequest = (requestId: string) => {
-    setLoginRequests(loginRequests.map(r => 
-      r.id === requestId ? { ...r, status: 'denied' as const } : r
-    ));
-    setShowLoginRequestModal(false);
-    setActiveLoginRequest(null);
-    Alert.alert("Request Denied", "The login request has been denied.");
-  };
-
-  const flagAccount = () => {
-    if (!staffSelectedAccount) return;
-    
-    Alert.prompt(
-      "Flag Account",
-      "Enter reason for flagging this account:",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Flag",
-          onPress: (reason?: string) => {
-            setUserAccounts(userAccounts.map(u =>
-              u.id === staffSelectedAccount.id
-                ? { ...u, flagged: true, flagReason: reason || 'No reason provided' }
-                : u
-            ));
-            setStaffSelectedAccount({
-              ...staffSelectedAccount,
-              flagged: true,
-              flagReason: reason || 'No reason provided'
-            });
-            Alert.alert("Success", "Account has been flagged.");
-          }
-        }
-      ],
-      "plain-text"
-    );
-  };
-
-  const unflagAccount = () => {
-    if (!staffSelectedAccount) return;
-    
-    setUserAccounts(userAccounts.map(u =>
-      u.id === staffSelectedAccount.id
-        ? { ...u, flagged: false, flagReason: undefined }
-        : u
-    ));
-    setStaffSelectedAccount({
-      ...staffSelectedAccount,
-      flagged: false,
-      flagReason: undefined
-    });
-    Alert.alert("Success", "Account flag has been removed.");
-  };
-
-  const blacklistAccount = () => {
-    if (!staffSelectedAccount) return;
-    
-    Alert.alert(
-      "⚠️ Blacklist Account",
-      `This will:\n• Delete the account\n• Ban IP: ${staffSelectedAccount.ipAddress || 'Unknown'}\n• Ban MAC: ${staffSelectedAccount.macAddress || 'Unknown'}\n\nThis action cannot be undone!`,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Blacklist",
-          style: "destructive",
-          onPress: () => {
-            Alert.prompt(
-              "Confirm Blacklist",
-              "Enter reason for blacklisting:",
-              [
-                { text: "Cancel", style: "cancel" },
-                {
-                  text: "Confirm",
-                  style: "destructive",
-                  onPress: (reason?: string) => {
-                    const entry: BlacklistEntry = {
-                      ip: staffSelectedAccount.ipAddress,
-                      mac: staffSelectedAccount.macAddress,
-                      reason: reason || 'No reason provided',
-                      timestamp: new Date(),
-                      staffId: 'staff-' + Date.now(),
-                    };
-                    
-                    setBlacklistEntries([...blacklistEntries, entry]);
-                    
-                    // Mark account as blacklisted and remove from active accounts
-                    setUserAccounts(userAccounts.map(u =>
-                      u.id === staffSelectedAccount.id
-                        ? { ...u, blacklisted: true }
-                        : u
-                    ));
-                    
-                    setStaffSelectedAccount(null);
-                    setStaffSearchEmail("");
-                    
-                    Alert.alert("Success", "Account has been blacklisted and banned.");
-                  }
-                }
-              ],
-              "plain-text"
-            );
-          }
-        }
-      ]
-    );
-  };
-
-  const saveAccountEdits = () => {
-    if (!staffSelectedAccount) return;
-    
-    if (!staffEditEmail || !staffEditPassword || !staffEditPublicName || !staffEditPrivateName) {
-      Alert.alert("Error", "All fields are required.");
-      return;
-    }
-    
-    setUserAccounts(userAccounts.map(u =>
-      u.id === staffSelectedAccount.id
-        ? {
-            ...u,
-            email: staffEditEmail,
-            password: staffEditPassword,
-            publicName: staffEditPublicName,
-            privateName: staffEditPrivateName
-          }
-        : u
-    ));
-    
-    setStaffSelectedAccount({
-      ...staffSelectedAccount,
-      email: staffEditEmail,
-      password: staffEditPassword,
-      publicName: staffEditPublicName,
-      privateName: staffEditPrivateName
-    });
-    
-    setStaffEditMode(false);
-    Alert.alert("Success", "Account information has been updated.");
   };
 
   const openLocationScreen = () => {
@@ -2263,20 +1406,6 @@ export default function CalculatorApp() {
       }
     }
     switchMode("camera");
-  };
-
-  const openBrowserScreen = async () => {
-    try {
-      // Load last URL for current user if available
-      if (currentUser && !browserInitialUrlLoaded) {
-        const saved = await AsyncStorage.getItem(`browser:lastUrl:${currentUser.id}`);
-        if (saved) {
-          setBrowserUrl(saved);
-        }
-        setBrowserInitialUrlLoaded(true);
-      }
-    } catch {}
-    switchMode("browser");
   };
 
   const closeCameraScreen = () => {
@@ -2407,14 +1536,6 @@ export default function CalculatorApp() {
       if (!a.isPinned && b.isPinned) return 1;
       return b.timestamp.getTime() - a.timestamp.getTime();
     });
-
-    const query = messageSearchQuery.trim().toLowerCase();
-    const filteredContacts = query
-      ? sortedContacts.filter(c =>
-          c.name.toLowerCase().includes(query) ||
-          (c.lastMessage || '').toLowerCase().includes(query)
-        )
-      : sortedContacts;
     
     const iconColor = messagingAppColor === "#007AFF" ? "#000000" : "#007AFF";
     
@@ -2448,23 +1569,6 @@ export default function CalculatorApp() {
           </View>
         </View>
 
-        <View style={styles.searchBarRow}>
-          <Search size={18} color="#8E8E93" />
-          <TextInput
-            style={styles.searchInput}
-            placeholder="Search"
-            placeholderTextColor="#8E8E93"
-            value={messageSearchQuery}
-            onChangeText={setMessageSearchQuery}
-            autoCapitalize="none"
-          />
-          {messageSearchQuery.length > 0 && (
-            <TouchableOpacity onPress={() => setMessageSearchQuery("")}>
-              <X size={18} color="#8E8E93" />
-            </TouchableOpacity>
-          )}
-        </View>
-
         <View style={styles.addContactButtonContainer}>
           <TouchableOpacity
             style={styles.addContactButton}
@@ -2475,30 +1579,8 @@ export default function CalculatorApp() {
           </TouchableOpacity>
         </View>
 
-        <ScrollView
-          style={styles.messagesList}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => {
-            try {
-              setRefreshing(true);
-              // Simulate refresh, hook to realtime later
-              await new Promise(res => setTimeout(res, 600));
-            } finally {
-              setRefreshing(false);
-            }
-          }} />}
-        >
-          {!persistLoaded && contacts.length === 0 ? (
-            Array.from({ length: 6 }).map((_, i) => (
-              <View key={`skeleton-${i}`} style={styles.skeletonRow}>
-                <View style={styles.skeletonAvatar} />
-                <View style={styles.skeletonTextBlock}>
-                  <View style={styles.skeletonLineShort} />
-                  <View style={styles.skeletonLineLong} />
-                </View>
-              </View>
-            ))
-          ) : (
-            filteredContacts.map(contact => (
+        <ScrollView style={styles.messagesList}>
+          {sortedContacts.map(contact => (
             <TouchableOpacity 
               key={contact.id}
               style={styles.messageItem} 
@@ -2522,11 +1604,7 @@ export default function CalculatorApp() {
               <View style={styles.messageContent}>
                 <View style={styles.messageHeader}>
                   <View style={styles.messageNameRow}>
-                      <Text style={styles.messageName}>
-                        {messageSearchQuery
-                          ? contact.name
-                          : contact.name}
-                      </Text>
+                    <Text style={styles.messageName}>{contact.name}</Text>
                     {contact.isMuted && (
                       <BellOff size={14} color="#8E8E93" style={{ marginLeft: 6 }} />
                     )}
@@ -2537,9 +1615,9 @@ export default function CalculatorApp() {
                       : contact.timestamp.toLocaleDateString()}
                   </Text>
                 </View>
-                  <Text style={[styles.messagePreview, contact.isMuted && { color: "#5E5E63" }]}>
-                    {contact.lastMessage || "No messages yet"}
-                  </Text>
+                <Text style={[styles.messagePreview, contact.isMuted && { color: "#5E5E63" }]}>
+                  {contact.lastMessage || "No messages yet"}
+                </Text>
               </View>
               {contact.unread > 0 && (
                 <View style={styles.unreadBadge}>
@@ -2547,8 +1625,7 @@ export default function CalculatorApp() {
                 </View>
               )}
             </TouchableOpacity>
-            ))
-          )}
+          ))}
         </ScrollView>
         
         <View style={styles.bottomNavBar}>
@@ -2564,10 +1641,6 @@ export default function CalculatorApp() {
             <Camera size={28} color={mode === "camera" ? "#007AFF" : "#8E8E93"} strokeWidth={2} />
             <Text style={[styles.bottomNavText, mode === "camera" && styles.bottomNavTextActive]}>Camera</Text>
           </TouchableOpacity>
-          <TouchableOpacity onPress={openBrowserScreen} style={styles.bottomNavButton}>
-            <Globe size={28} color={mode === "browser" ? "#007AFF" : "#8E8E93"} strokeWidth={2} />
-            <Text style={[styles.bottomNavText, mode === "browser" && styles.bottomNavTextActive]}>Browser</Text>
-          </TouchableOpacity>
         </View>
       </Animated.View>
     );
@@ -2577,36 +1650,6 @@ export default function CalculatorApp() {
     const selectedContact = contacts.find(c => c.id === selectedContactId);
     const currentMessages = selectedContact?.isAI ? aiMessages : messages;
     const showSwitcher = !selectedContact?.isAI;
-    const onReply = (m: Message) => {
-      const snippet = m.text.length > 80 ? m.text.slice(0, 80) + '…' : m.text;
-      setInputText(prev => (prev ? prev + "\n" : "") + `> ${snippet}\n`);
-      try { Haptics.selectionAsync(); } catch {}
-    };
-
-    const renderHighlightedText = (text: string, query: string) => {
-      if (!query.trim()) return <Text>{text}</Text>;
-      const q = query.toLowerCase();
-      const lower = text.toLowerCase();
-      const parts: Array<{ text: string; match: boolean }> = [];
-      let i = 0;
-      while (i < text.length) {
-        const idx = lower.indexOf(q, i);
-        if (idx === -1) {
-          parts.push({ text: text.slice(i), match: false });
-          break;
-        }
-        if (idx > i) parts.push({ text: text.slice(i, idx), match: false });
-        parts.push({ text: text.slice(idx, idx + q.length), match: true });
-        i = idx + q.length;
-      }
-      return (
-        <Text>
-          {parts.map((p, idx) => (
-            <Text key={idx} style={p.match ? styles.highlightText : undefined}>{p.text}</Text>
-          ))}
-        </Text>
-      );
-    };
     
     return (
     <Animated.View style={[styles.chatContainer, { opacity: fadeAnim }]}>
@@ -2640,9 +1683,6 @@ export default function CalculatorApp() {
             )}
           </View>
           <View style={styles.headerButtons}>
-            <TouchableOpacity style={styles.headerIconButton} onPress={() => setShowChatSearch(s => !s)}>
-              <Search size={22} color="#007AFF" strokeWidth={2} />
-            </TouchableOpacity>
             <TouchableOpacity style={styles.headerIconButton} onPress={() => Alert.alert("Voice Call", "Voice calling feature coming soon!")}>
               <Phone size={22} color="#007AFF" strokeWidth={2} />
             </TouchableOpacity>
@@ -2651,30 +1691,6 @@ export default function CalculatorApp() {
             </TouchableOpacity>
           </View>
         </View>
-
-        {showChatSearch && (
-          <View style={styles.chatSearchBarRow}>
-            <Search size={16} color="#8E8E93" />
-            <TextInput
-              style={styles.searchInput}
-              placeholder="Search in chat"
-              placeholderTextColor="#8E8E93"
-              value={chatSearchQuery}
-              onChangeText={(t) => { setChatSearchQuery(t); setChatSearchIndex(0); }}
-              autoCapitalize="none"
-            />
-            <Text style={styles.chatSearchCount}>{chatSearchMatches.length ? `${chatSearchIndex + 1}/${chatSearchMatches.length}` : '0/0'}</Text>
-            <TouchableOpacity style={styles.chatSearchNavButton} onPress={() => navigateChatSearch(-1)}>
-              <Text style={styles.chatSearchNavText}>‹</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.chatSearchNavButton} onPress={() => navigateChatSearch(1)}>
-              <Text style={styles.chatSearchNavText}>›</Text>
-            </TouchableOpacity>
-            <TouchableOpacity onPress={() => { setShowChatSearch(false); setChatSearchQuery(""); }}>
-              <X size={16} color="#8E8E93" />
-            </TouchableOpacity>
-          </View>
-        )}
 
         <View style={styles.chatMessages}>
           {chatBackgroundImage && (
@@ -2697,38 +1713,26 @@ export default function CalculatorApp() {
                       if (message.text === '') return null;
               const effectAnim = effectAnimations[message.id];
               const hasEffect = message.effect === 'slam' || message.effect === 'float';
-
-              return (
-                <View key={message.id} onLayout={(e) => { messageLayoutY[message.id] = e.nativeEvent.layout.y; }}>
-                  <Swipeable
-                    ref={(r) => { swipeRefs[message.id] = r; }}
-                    overshootLeft={false}
-                    overshootRight={false}
-                    renderLeftActions={() => (
-                      <View style={[styles.swipeActionLeft, { flexDirection: 'row', gap: 8, paddingHorizontal: 8 }]}>
-                        <TouchableOpacity onPress={() => { onReply(message); swipeRefs[message.id]?.close(); }}>
-                          <Text style={styles.swipeActionText}>Reply</Text>
-                        </TouchableOpacity>
-                      </View>
-                    )}
-                    renderRightActions={() => (
-                      <View style={[styles.swipeActionRight, { flexDirection: 'row', gap: 12, paddingHorizontal: 8 }]}>
-                        <TouchableOpacity onPress={() => { setLongPressedMessage(message.id); swipeRefs[message.id]?.close(); handleEditMessage(); }}>
-                          <Text style={styles.swipeActionText}>Edit</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity onPress={() => { setLongPressedMessage(message.id); handleDeleteMessage(); swipeRefs[message.id]?.close(); }}>
-                          <Text style={styles.swipeActionText}>Delete</Text>
-                        </TouchableOpacity>
-                      </View>
-                    )}
-                  >
-                  <Animated.View style={hasEffect && effectAnim ? {
+              const animStyle = effectAnim && hasEffect
+                ? {
                     transform: [
                       { scale: effectAnim.scale },
                       { translateY: effectAnim.translateY },
                     ],
                     opacity: effectAnim.opacity,
-                  } : undefined}>
+                    position: 'absolute' as const,
+                    left: '50%',
+                    top: '50%',
+                    marginLeft: -150,
+                    marginTop: -50,
+                    zIndex: 1000,
+                    width: 300,
+                  }
+                : {};
+
+              return (
+                <View key={message.id}>
+                  <Animated.View style={animStyle}>
                     <TouchableOpacity
                       activeOpacity={0.8}
                       onLongPress={() => handleLongPressMessage(message.id)}
@@ -2761,12 +1765,11 @@ export default function CalculatorApp() {
                               : styles.aspenBubbleText,
                           ]}
                         >
-                          {renderHighlightedText(message.text, chatSearchQuery)}
+                          {message.text}
                         </Text>
                       )}
                     </TouchableOpacity>
                   </Animated.View>
-                  </Swipeable>
                   <Text
                     style={[
                       styles.messageTimestamp,
@@ -2777,17 +1780,6 @@ export default function CalculatorApp() {
                   >
                     {formatTime(message.timestamp)}
                   </Text>
-                  {!selectedContact?.isAI && message.sender === 'user' && message.status && (
-                    <Text
-                      style={[
-                        styles.messageStatus,
-                        message.status === 'failed' ? styles.messageStatusFailed : message.status === 'sending' ? styles.messageStatusSending : styles.messageStatusSent,
-                        message.sender === 'user' ? styles.messageTimestampRight : styles.messageTimestampLeft,
-                      ]}
-                    >
-                      {message.status === 'sending' ? 'sending…' : message.status === 'failed' ? 'failed' : 'sent'}
-                    </Text>
-                  )}
                 </View>
               );
             })}
@@ -2964,92 +1956,6 @@ export default function CalculatorApp() {
     );
   };
 
-  const renderBrowserScreen = () => {
-    const hotLinks: { label: string; url: string }[] = [
-      { label: 'Lowkeydis', url: 'https://lowkeydis.com' },
-      { label: 'YouTube', url: 'https://youtube.com' },
-      { label: 'Spotify', url: 'https://spotify.com' },
-      { label: 'Discord', url: 'https://discord.com' },
-    ];
-
-    const openUrl = (text: string) => {
-      const trimmed = text.trim();
-      if (!trimmed) return;
-      const normalized = /^(https?:)?\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
-      setBrowserUrl(normalized);
-      // Persist per-user last url
-      if (currentUser) AsyncStorage.setItem(`browser:lastUrl:${currentUser.id}`, normalized).catch(() => {});
-    };
-
-    return (
-      <View style={styles.browserContainer}>
-        <View style={styles.browserHeader}>
-          <View style={styles.browserControls}>
-            <TouchableOpacity
-              onPress={() => webviewRef.current?.goBack()}
-              disabled={!canGoBack}
-              style={[styles.navControl, !canGoBack && styles.navControlDisabled]}
-            >
-              <Text style={styles.navControlText}>{'<'} Back</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              onPress={() => webviewRef.current?.goForward()}
-              disabled={!canGoForward}
-              style={[styles.navControl, !canGoForward && styles.navControlDisabled]}
-            >
-              <Text style={styles.navControlText}>Forward {'>'}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity onPress={() => webviewRef.current?.reload()} style={styles.navControl}>
-              <Text style={styles.navControlText}>Reload</Text>
-            </TouchableOpacity>
-          </View>
-          <View style={styles.addressBarRow}>
-            <TextInput
-              value={browserUrl}
-              onChangeText={setBrowserUrl}
-              onSubmitEditing={() => openUrl(browserUrl)}
-              placeholder="Enter URL"
-              placeholderTextColor="#8E8E93"
-              autoCapitalize="none"
-              autoCorrect={false}
-              keyboardType="url"
-              style={styles.addressBar}
-            />
-            <TouchableOpacity onPress={() => openUrl(browserUrl)} style={styles.goButton}>
-              <Text style={styles.goButtonText}>Go</Text>
-            </TouchableOpacity>
-          </View>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.hotLinksRow}>
-            {hotLinks.map(link => (
-              <TouchableOpacity key={link.url} style={styles.hotLink} onPress={() => openUrl(link.url)}>
-                <Text style={styles.hotLinkText}>{link.label}</Text>
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
-        </View>
-        <WebView
-          ref={(r) => { webviewRef.current = r; }}
-          source={{ uri: browserUrl }}
-          startInLoadingState
-          javaScriptEnabled
-          domStorageEnabled
-          sharedCookiesEnabled
-          thirdPartyCookiesEnabled
-          cacheEnabled
-          allowsBackForwardNavigationGestures
-          onNavigationStateChange={(navState) => {
-            setCanGoBack(navState.canGoBack);
-            setCanGoForward(navState.canGoForward);
-            if (navState.url && currentUser) {
-              AsyncStorage.setItem(`browser:lastUrl:${currentUser.id}`, navState.url).catch(() => {});
-            }
-          }}
-          style={styles.webView}
-        />
-      </View>
-    );
-  };
-
   const renderInfoScreen = () => (
     <Animated.View style={[styles.infoContainer, { opacity: fadeAnim }]}>
       <SafeAreaView style={styles.infoSafeArea}>
@@ -3070,13 +1976,6 @@ export default function CalculatorApp() {
             <Text style={styles.infoLabel}>Support Email</Text>
             <Text style={styles.infoEmail}>cruzzerapps@gmail.com</Text>
           </View>
-
-          <View style={styles.infoSection}>
-            <Text style={styles.infoLabel}>Join Our Discord</Text>
-            <TouchableOpacity onPress={() => Linking.openURL('https://discord.gg/vGQweSv7j4')}>
-              <Text style={styles.infoEmail}>discord.gg/vGQweSv7j4</Text>
-            </TouchableOpacity>
-          </View>
           
           <View style={styles.infoFooter}>
             <Text style={styles.infoThankYou}>Thank you for using this app!</Text>
@@ -3088,16 +1987,16 @@ export default function CalculatorApp() {
 
   const renderVideoCall = () => (
     <Animated.View style={[styles.videoCallContainer, { opacity: fadeAnim }]}>
-      <SafeAreaView style={styles.videoCallContent}>
-        <TouchableOpacity style={styles.videoBackButton} onPress={closeVideoCall}>
-          <Text style={styles.videoBackButtonText}>←</Text>
-        </TouchableOpacity>
-        <View style={styles.videoCallBadge}>
-          <Video size={32} color="#0A84FF" strokeWidth={2} />
-        </View>
-        <Text style={styles.videoCallTitle}>Videocalling under construction</Text>
-        <Text style={styles.videoCallSubtitle}>Check back later!</Text>
-      </SafeAreaView>
+      <TouchableOpacity style={styles.videoBackButton} onPress={closeVideoCall}>
+        <Text style={styles.videoBackButtonText}>←</Text>
+      </TouchableOpacity>
+      <View style={styles.videoImageContainer}>
+        <Image
+          source={{ uri: "https://pub-e001eb4506b145aa938b5d3badbff6a5.r2.dev/attachments/hta1czh5uqojza6egdeyk" }}
+          style={styles.videoImage}
+          resizeMode="cover"
+        />
+      </View>
     </Animated.View>
   );
 
@@ -3434,18 +2333,6 @@ export default function CalculatorApp() {
               )}
             </View>
           )}
-
-          {/* App Settings Button */}
-          <View style={styles.profileEditSection}>
-            <TouchableOpacity 
-              style={styles.appSettingsButton}
-              onPress={() => switchMode("settings")}
-            >
-              <Settings size={24} color="#007AFF" />
-              <Text style={styles.appSettingsButtonText}>App Settings</Text>
-              <Text style={styles.appSettingsArrow}>→</Text>
-            </TouchableOpacity>
-          </View>
         </ScrollView>
       </SafeAreaView>
     </Animated.View>
@@ -4029,268 +2916,6 @@ export default function CalculatorApp() {
     );
   };
 
-  const renderCrashLogsScreen = () => (
-    <Animated.View style={[styles.crashLogsContainer, { opacity: fadeAnim }]}>
-      <SafeAreaView style={{ flex: 1 }}>
-        <View style={styles.crashLogsHeader}>
-          <TouchableOpacity onPress={() => switchMode("developer")} style={styles.crashLogsBackButton}>
-            <Text style={styles.crashLogsBackText}>← Back</Text>
-          </TouchableOpacity>
-          <Text style={styles.crashLogsTitle}>Crash Logs</Text>
-          <TouchableOpacity onPress={() => { clearCrashLogs(); setCrashLogs([]); }} style={styles.crashLogsClearButton}>
-            <Text style={styles.crashLogsClearText}>Clear</Text>
-          </TouchableOpacity>
-        </View>
-
-        <ScrollView style={styles.crashLogsContent}>
-          {crashLogs.length === 0 ? (
-            <View style={styles.emptyCrashLogs}>
-              <AlertTriangle size={48} color="#34C759" />
-              <Text style={styles.emptyCrashLogsText}>No crash logs 🎉{'\n'}App is running smoothly</Text>
-            </View>
-          ) : (
-            crashLogs.map((log) => (
-              <View key={log.id} style={styles.crashLogItem}>
-                <View style={styles.crashLogHeader}>
-                  <Text style={styles.crashLogType}>{log.fatal ? 'FATAL' : 'ERROR'}</Text>
-                  <Text style={styles.crashLogTime}>{new Date(log.timestamp).toLocaleString()}</Text>
-                </View>
-                <Text style={styles.crashLogMessage}>{log.message}</Text>
-                {log.userEmail && (
-                  <Text style={styles.crashLogUser}>User: {log.userEmail}</Text>
-                )}
-                {log.stack && (
-                  <ScrollView horizontal>
-                    <Text style={styles.crashLogStack}>{log.stack.substring(0, 500)}</Text>
-                  </ScrollView>
-                )}
-              </View>
-            ))
-          )}
-        </ScrollView>
-      </SafeAreaView>
-    </Animated.View>
-  );
-
-  const renderSettingsScreen = () => (
-    <Animated.View style={[styles.settingsContainer, { opacity: fadeAnim }]}>
-      <SafeAreaView style={{ flex: 1 }}>
-        <View style={styles.settingsHeader}>
-          <TouchableOpacity onPress={() => switchMode("profile")} style={styles.settingsBackButton}>
-            <Text style={styles.settingsBackText}>← Back</Text>
-          </TouchableOpacity>
-          <Text style={styles.settingsTitle}>App Settings</Text>
-          <View style={styles.settingsBackButton} />
-        </View>
-
-        <ScrollView style={styles.settingsContent}>
-          <View style={styles.settingsSection}>
-            <Text style={styles.settingsSectionTitle}>Appearance</Text>
-            
-            <TouchableOpacity 
-              style={styles.settingsItem}
-              onPress={() => handleChangeChatBackground("color")}
-            >
-              <View style={{ width: 24, height: 24, borderRadius: 4, backgroundColor: chatBackgroundColor, marginRight: 12 }} />
-              <Text style={styles.settingsItemText}>Chat Background Color</Text>
-              <Text style={styles.settingsItemArrow}>→</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity 
-              style={styles.settingsItem}
-              onPress={() => {
-                const colors = ['#000000', '#1C1C1E', '#0A0A0A', '#121212', '#1A1A2E'];
-                const current = colors.indexOf(messagingAppColor);
-                const next = (current + 1) % colors.length;
-                setMessagingAppColor(colors[next]);
-              }}
-            >
-              <View style={{ width: 24, height: 24, borderRadius: 4, backgroundColor: messagingAppColor, marginRight: 12 }} />
-              <Text style={styles.settingsItemText}>App Theme Color</Text>
-              <Text style={styles.settingsItemArrow}>→</Text>
-            </TouchableOpacity>
-          </View>
-
-          <View style={styles.settingsSection}>
-            <Text style={styles.settingsSectionTitle}>Privacy</Text>
-            
-            <TouchableOpacity 
-              style={styles.settingsItem}
-              onPress={() => {
-                const options: LocationVisibility[] = ['everyone', 'contacts', 'nobody', 'silent'];
-                const current = options.indexOf(locationVisibility);
-                const next = (current + 1) % options.length;
-                setLocationVisibility(options[next]);
-              }}
-            >
-              <MapPin size={24} color="#007AFF" />
-              <Text style={styles.settingsItemText}>Location: {locationVisibility}</Text>
-              <Text style={styles.settingsItemArrow}>→</Text>
-            </TouchableOpacity>
-          </View>
-
-          <View style={styles.settingsSection}>
-            <Text style={styles.settingsSectionTitle}>Music</Text>
-            
-            <TouchableOpacity 
-              style={styles.settingsItem}
-              onPress={() => switchMode("music")}
-            >
-              <Music size={24} color="#FF2D55" />
-              <Text style={styles.settingsItemText}>Manage Music Playlist</Text>
-              <Text style={styles.settingsItemArrow}>→</Text>
-            </TouchableOpacity>
-            
-            {musicPlayerState.tracks.length > 0 && (
-              <View style={[styles.settingsItem, { backgroundColor: '#1a3a1a' }]}>
-                <Text style={{ color: '#32CD32', fontSize: 14, flex: 1 }}>
-                  {musicPlayerState.isPlaying 
-                    ? `▶ Playing: ${musicPlayerState.tracks[musicPlayerState.currentIndex]?.name}`
-                    : `🎵 ${musicPlayerState.tracks.length} songs in playlist`
-                  }
-                </Text>
-              </View>
-            )}
-          </View>
-        </ScrollView>
-      </SafeAreaView>
-    </Animated.View>
-  );
-
-  const renderMusicScreen = () => (
-    <Animated.View style={[styles.musicContainer, { opacity: fadeAnim }]}>
-      <SafeAreaView style={{ flex: 1 }}>
-        <View style={styles.musicHeader}>
-          <TouchableOpacity onPress={() => switchMode("settings")} style={styles.musicBackButton}>
-            <Text style={styles.musicBackText}>← Back</Text>
-          </TouchableOpacity>
-          <Text style={styles.musicTitle}>🎵 Music</Text>
-          <View style={styles.musicBackButton} />
-        </View>
-
-        <ScrollView style={styles.musicContent}>
-          {/* Current Playlist */}
-          <View style={styles.musicSection}>
-            <Text style={styles.musicSectionTitle}>Your Playlist ({musicPlayerState.tracks.length}/5)</Text>
-            <Text style={styles.playlistInfo}>Songs play on loop in order selected</Text>
-            
-            {musicPlayerState.tracks.length > 0 ? (
-              <>
-                {musicPlayerState.tracks.map((track, index) => (
-                  <View key={track.id} style={[
-                    styles.musicTrack,
-                    index === musicPlayerState.currentIndex && musicPlayerState.isPlaying && styles.musicTrackPlaying
-                  ]}>
-                    <View style={styles.musicTrackInfo}>
-                      <Text style={styles.musicTrackTitle} numberOfLines={1}>{track.name}</Text>
-                      <Text style={styles.musicTrackArtist} numberOfLines={1}>{track.artist}</Text>
-                    </View>
-                    <TouchableOpacity onPress={() => removeTrackFromPlaylist(track.id)} style={styles.removeFromPlaylistButton}>
-                      <X size={18} color="#FF3B30" />
-                    </TouchableOpacity>
-                  </View>
-                ))}
-
-                {/* Playback Controls */}
-                <View style={styles.musicPlayerControls}>
-                  {!musicPlayerState.isPlaying ? (
-                    <TouchableOpacity style={styles.musicControlButtonMain} onPress={playMusic}>
-                      <Play size={28} color="#FFFFFF" fill="#FFFFFF" />
-                    </TouchableOpacity>
-                  ) : musicPlayerState.isPaused ? (
-                    <TouchableOpacity style={styles.musicControlButtonMain} onPress={resumeMusic}>
-                      <Play size={28} color="#FFFFFF" fill="#FFFFFF" />
-                    </TouchableOpacity>
-                  ) : (
-                    <TouchableOpacity style={styles.musicControlButtonMain} onPress={pauseMusic}>
-                      <Pause size={28} color="#FFFFFF" fill="#FFFFFF" />
-                    </TouchableOpacity>
-                  )}
-                  <TouchableOpacity style={styles.musicControlButton} onPress={playNextTrack}>
-                    <SkipForward size={24} color="#FFFFFF" />
-                  </TouchableOpacity>
-                  <TouchableOpacity style={styles.musicControlButton} onPress={stopMusic}>
-                    <Text style={{ color: '#FF3B30', fontSize: 14 }}>Stop</Text>
-                  </TouchableOpacity>
-                </View>
-
-                {musicPlayerState.isPlaying && (
-                  <Text style={styles.nowPlayingText}>
-                    Now Playing: {musicPlayerState.tracks[musicPlayerState.currentIndex]?.name}
-                  </Text>
-                )}
-
-                <TouchableOpacity 
-                  style={[styles.musicTrack, { backgroundColor: '#3a1a1a', justifyContent: 'center' }]} 
-                  onPress={clearPlaylist}
-                >
-                  <Text style={{ color: '#FF3B30', textAlign: 'center' }}>Clear Playlist</Text>
-                </TouchableOpacity>
-              </>
-            ) : (
-              <View style={styles.emptyPlaylist}>
-                <Music size={48} color="#8E8E93" />
-                <Text style={styles.emptyPlaylistText}>No songs in playlist yet{'\n'}Search below to add songs</Text>
-              </View>
-            )}
-          </View>
-
-          {/* Search Section */}
-          <View style={styles.musicSection}>
-            <Text style={styles.musicSectionTitle}>Search Songs</Text>
-            <View style={styles.musicSearchContainer}>
-              <TextInput
-                style={styles.musicSearchInput}
-                placeholder="Search for songs..."
-                placeholderTextColor="#8E8E93"
-                value={musicSearchQuery}
-                onChangeText={setMusicSearchQuery}
-                onSubmitEditing={searchMusic}
-                returnKeyType="search"
-              />
-              <TouchableOpacity style={styles.musicSearchButton} onPress={searchMusic}>
-                <Search size={20} color="#007AFF" />
-              </TouchableOpacity>
-            </View>
-
-            {musicSearchLoading ? (
-              <ActivityIndicator size="large" color="#007AFF" style={{ marginTop: 20 }} />
-            ) : (
-              musicSearchResults.map((track) => (
-                <TouchableOpacity 
-                  key={track.id} 
-                  style={styles.musicTrack}
-                  onPress={() => addTrackToPlaylist(track)}
-                  disabled={musicPlayerState.tracks.length >= 5}
-                >
-                  <View style={styles.musicTrackInfo}>
-                    <Text style={styles.musicTrackTitle} numberOfLines={1}>{track.name}</Text>
-                    <Text style={styles.musicTrackArtist} numberOfLines={1}>{track.artist}</Text>
-                  </View>
-                  <Text style={styles.musicTrackDuration}>{Math.floor(track.duration / 60)}:{(track.duration % 60).toString().padStart(2, '0')}</Text>
-                  <TouchableOpacity 
-                    style={[
-                      styles.addToPlaylistButton, 
-                      (musicPlayerState.tracks.find(t => t.id === track.id) || musicPlayerState.tracks.length >= 5) && styles.addToPlaylistButtonDisabled
-                    ]}
-                    onPress={() => addTrackToPlaylist(track)}
-                    disabled={!!musicPlayerState.tracks.find(t => t.id === track.id) || musicPlayerState.tracks.length >= 5}
-                  >
-                    <Heart 
-                      size={18} 
-                      color={musicPlayerState.tracks.find(t => t.id === track.id) ? "#FF3B30" : "#007AFF"} 
-                      fill={musicPlayerState.tracks.find(t => t.id === track.id) ? "#FF3B30" : "transparent"}
-                    />
-                  </TouchableOpacity>
-                </TouchableOpacity>
-              ))
-            )}
-          </View>
-        </ScrollView>
-      </SafeAreaView>
-    </Animated.View>
-  );
-
   const renderCameraScreen = () => (
     <Animated.View style={[styles.cameraContainer, { opacity: fadeAnim }]}>
       <CameraView
@@ -4349,18 +2974,6 @@ export default function CalculatorApp() {
           <View style={styles.developerBackButton} />
         </View>
 
-        {/* Crash Logs Button */}
-        <TouchableOpacity 
-          style={styles.devPanelCrashButton}
-          onPress={() => {
-            setCrashLogs(getCrashLogs());
-            switchMode("crashLogs");
-          }}
-        >
-          <AlertTriangle size={20} color="#FF3B30" />
-          <Text style={styles.devPanelCrashButtonText}>Crash Logs ({getCrashLogs().length})</Text>
-        </TouchableOpacity>
-
         <View style={styles.searchContainer}>
           <Search size={20} color="#8E8E93" />
           <TextInput
@@ -4399,11 +3012,6 @@ export default function CalculatorApp() {
                     </View>
                   </View>
                   <View style={styles.accountCardBadges}>
-                    {account.isGoogleAccount && (
-                      <View style={styles.googleBadge}>
-                        <Text style={styles.googleBadgeText}>Google</Text>
-                      </View>
-                    )}
                     {account.whitelisted && (
                       <View style={styles.vipBadge}>
                         <Crown size={12} color="#FFD700" />
@@ -4469,13 +3077,6 @@ export default function CalculatorApp() {
                       </Text>
                     </View>
 
-                    <View style={styles.accountCardRow}>
-                      <Text style={styles.accountCardLabel}>Account Type:</Text>
-                      <Text style={styles.accountCardValue}>
-                        {account.isGoogleAccount ? "Google Account" : "Email/Password"}
-                      </Text>
-                    </View>
-
                     <View style={styles.whitelistButtonContainer}>
                       {account.whitelisted ? (
                         <TouchableOpacity
@@ -4504,268 +3105,6 @@ export default function CalculatorApp() {
     </Animated.View>
   );
 
-  const renderStaffPanel = () => {
-    const flaggedAccounts = userAccounts.filter(u => u.flagged && !u.blacklisted);
-    
-    return (
-      <Animated.View style={[styles.staffContainer, { opacity: fadeAnim }]}>
-        <SafeAreaView style={styles.staffSafeArea}>
-          <View style={styles.staffHeader}>
-            <TouchableOpacity onPress={closeDeveloperPanel} style={styles.staffBackButton}>
-              <Text style={styles.backButtonText}>←</Text>
-            </TouchableOpacity>
-            <View style={{ alignItems: 'center' }}>
-              <Text style={styles.staffTitle}>Staff Panel</Text>
-              {isStaffMode && <Text style={{ color: '#34C759', fontSize: 10 }}>● ACTIVE</Text>}
-            </View>
-            <View style={styles.staffBackButton} />
-          </View>
-
-          <ScrollView style={styles.staffContent}>
-            {/* Search Section */}
-            <View style={styles.staffSection}>
-              <Text style={styles.staffSectionTitle}>Search Account</Text>
-              <View style={styles.staffSearchContainer}>
-                <TextInput
-                  style={styles.staffSearchInput}
-                  placeholder="Enter exact email address..."
-                  placeholderTextColor="#8E8E93"
-                  value={staffSearchEmail}
-                  onChangeText={setStaffSearchEmail}
-                  autoCapitalize="none"
-                  keyboardType="email-address"
-                />
-                <TouchableOpacity style={styles.staffSearchButton} onPress={searchAccountByEmail}>
-                  <Search size={20} color="#FFFFFF" />
-                </TouchableOpacity>
-              </View>
-            </View>
-
-            {/* Flagged Accounts */}
-            {flaggedAccounts.length > 0 && (
-              <View style={styles.staffSection}>
-                <Text style={styles.staffSectionTitle}>⚠️ Flagged Accounts ({flaggedAccounts.length})</Text>
-                {flaggedAccounts.map(account => (
-                  <TouchableOpacity
-                    key={account.id}
-                    style={styles.flaggedAccountItem}
-                    onPress={() => {
-                      setStaffSearchEmail(account.email);
-                      setStaffSelectedAccount(account);
-                      setStaffEditEmail(account.email);
-                      setStaffEditPassword(account.password);
-                      setStaffEditPublicName(account.publicName);
-                      setStaffEditPrivateName(account.privateName);
-                    }}
-                  >
-                    <View style={styles.flaggedAccountInfo}>
-                      <Text style={styles.flaggedAccountEmail}>{account.email}</Text>
-                      <Text style={styles.flaggedAccountName}>{account.publicName}</Text>
-                      <Text style={styles.flaggedAccountReason}>Reason: {account.flagReason}</Text>
-                    </View>
-                    <AlertTriangle size={20} color="#FF3B30" />
-                  </TouchableOpacity>
-                ))}
-              </View>
-            )}
-
-            {/* Selected Account Details */}
-            {staffSelectedAccount && (
-              <View style={styles.staffSection}>
-                <View style={styles.accountDetailHeader}>
-                  <Text style={styles.staffSectionTitle}>Account Details</Text>
-                  {staffSelectedAccount.flagged && (
-                    <View style={styles.flaggedBadge}>
-                      <Text style={styles.flaggedBadgeText}>FLAGGED</Text>
-                    </View>
-                  )}
-                </View>
-
-                {!staffEditMode ? (
-                  <>
-                    <View style={styles.accountDetailCard}>
-                      <View style={styles.accountDetailRow}>
-                        <Text style={styles.accountDetailLabel}>Email:</Text>
-                        <Text style={styles.accountDetailValue}>{staffSelectedAccount.email}</Text>
-                      </View>
-                      <View style={styles.accountDetailRow}>
-                        <Text style={styles.accountDetailLabel}>Public Name:</Text>
-                        <Text style={styles.accountDetailValue}>{staffSelectedAccount.publicName}</Text>
-                      </View>
-                      <View style={styles.accountDetailRow}>
-                        <Text style={styles.accountDetailLabel}>Private Name:</Text>
-                        <Text style={styles.accountDetailValue}>{staffSelectedAccount.privateName}</Text>
-                      </View>
-                      <View style={styles.accountDetailRow}>
-                        <Text style={styles.accountDetailLabel}>Password:</Text>
-                        <Text style={styles.accountDetailValue}>{staffSelectedAccount.password}</Text>
-                      </View>
-                      <View style={styles.accountDetailRow}>
-                        <Text style={styles.accountDetailLabel}>Phone:</Text>
-                        <Text style={styles.accountDetailValue}>{staffSelectedAccount.phoneNumber || 'None'}</Text>
-                      </View>
-                      <View style={styles.accountDetailRow}>
-                        <Text style={styles.accountDetailLabel}>Last Login:</Text>
-                        <Text style={styles.accountDetailValue}>{staffSelectedAccount.lastLogin.toLocaleString()}</Text>
-                      </View>
-                      <View style={styles.accountDetailRow}>
-                        <Text style={styles.accountDetailLabel}>IP Address:</Text>
-                        <Text style={styles.accountDetailValue}>{staffSelectedAccount.ipAddress || 'Unknown'}</Text>
-                      </View>
-                      <View style={styles.accountDetailRow}>
-                        <Text style={styles.accountDetailLabel}>MAC Address:</Text>
-                        <Text style={styles.accountDetailValue}>{staffSelectedAccount.macAddress || 'Unknown'}</Text>
-                      </View>
-                      <View style={styles.accountDetailRow}>
-                        <Text style={styles.accountDetailLabel}>VIP Status:</Text>
-                        <Text style={styles.accountDetailValue}>
-                          {staffSelectedAccount.whitelisted ? '✓ Whitelisted' : '✗ Not VIP'}
-                        </Text>
-                      </View>
-                    </View>
-
-                    {/* Action Buttons */}
-                    <View style={styles.staffActionsContainer}>
-                      <TouchableOpacity
-                        style={styles.staffActionButton}
-                        onPress={() => setStaffEditMode(true)}
-                      >
-                        <Settings size={18} color="#007AFF" />
-                        <Text style={styles.staffActionButtonText}>Edit Info</Text>
-                      </TouchableOpacity>
-
-                      <TouchableOpacity
-                        style={styles.staffActionButton}
-                        onPress={requestAccountLogin}
-                      >
-                        <Lock size={18} color="#34C759" />
-                        <Text style={styles.staffActionButtonText}>Request Login</Text>
-                      </TouchableOpacity>
-
-                      {staffSelectedAccount.flagged ? (
-                        <TouchableOpacity
-                          style={[styles.staffActionButton, { backgroundColor: '#1a3a1a' }]}
-                          onPress={unflagAccount}
-                        >
-                          <Text style={[styles.staffActionButtonText, { color: '#34C759' }]}>Unflag</Text>
-                        </TouchableOpacity>
-                      ) : (
-                        <TouchableOpacity
-                          style={[styles.staffActionButton, { backgroundColor: '#3a3a1a' }]}
-                          onPress={flagAccount}
-                        >
-                          <AlertTriangle size={18} color="#FFD700" />
-                          <Text style={[styles.staffActionButtonText, { color: '#FFD700' }]}>Flag Account</Text>
-                        </TouchableOpacity>
-                      )}
-
-                      <TouchableOpacity
-                        style={[styles.staffActionButton, { backgroundColor: '#3a1a1a' }]}
-                        onPress={blacklistAccount}
-                      >
-                        <X size={18} color="#FF3B30" />
-                        <Text style={[styles.staffActionButtonText, { color: '#FF3B30' }]}>Blacklist</Text>
-                      </TouchableOpacity>
-                    </View>
-                  </>
-                ) : (
-                  <>
-                    {/* Edit Mode */}
-                    <View style={styles.accountEditCard}>
-                      <Text style={styles.accountEditLabel}>Email:</Text>
-                      <TextInput
-                        style={styles.accountEditInput}
-                        value={staffEditEmail}
-                        onChangeText={setStaffEditEmail}
-                        autoCapitalize="none"
-                        keyboardType="email-address"
-                      />
-
-                      <Text style={styles.accountEditLabel}>Password:</Text>
-                      <TextInput
-                        style={styles.accountEditInput}
-                        value={staffEditPassword}
-                        onChangeText={setStaffEditPassword}
-                      />
-
-                      <Text style={styles.accountEditLabel}>Public Name:</Text>
-                      <TextInput
-                        style={styles.accountEditInput}
-                        value={staffEditPublicName}
-                        onChangeText={setStaffEditPublicName}
-                      />
-
-                      <Text style={styles.accountEditLabel}>Private Name:</Text>
-                      <TextInput
-                        style={styles.accountEditInput}
-                        value={staffEditPrivateName}
-                        onChangeText={setStaffEditPrivateName}
-                      />
-
-                      <View style={styles.editButtonsContainer}>
-                        <TouchableOpacity
-                          style={styles.saveEditButton}
-                          onPress={saveAccountEdits}
-                        >
-                          <Text style={styles.saveEditButtonText}>Save Changes</Text>
-                        </TouchableOpacity>
-
-                        <TouchableOpacity
-                          style={styles.cancelEditButton}
-                          onPress={() => {
-                            setStaffEditMode(false);
-                            setStaffEditEmail(staffSelectedAccount.email);
-                            setStaffEditPassword(staffSelectedAccount.password);
-                            setStaffEditPublicName(staffSelectedAccount.publicName);
-                            setStaffEditPrivateName(staffSelectedAccount.privateName);
-                          }}
-                        >
-                          <Text style={styles.cancelEditButtonText}>Cancel</Text>
-                        </TouchableOpacity>
-                      </View>
-                    </View>
-                  </>
-                )}
-              </View>
-            )}
-
-            {/* Pending Login Requests */}
-            {loginRequests.filter(r => r.status === 'pending').length > 0 && (
-              <View style={styles.staffSection}>
-                <Text style={styles.staffSectionTitle}>Pending Login Requests</Text>
-                {loginRequests.filter(r => r.status === 'pending').map(request => (
-                  <View key={request.id} style={styles.loginRequestCard}>
-                    <Text style={styles.loginRequestEmail}>{request.targetEmail}</Text>
-                    <Text style={styles.loginRequestCode}>Code: {request.code}</Text>
-                    <Text style={styles.loginRequestExpires}>
-                      Expires: {request.expiresAt.toLocaleTimeString()}
-                    </Text>
-                  </View>
-                ))}
-              </View>
-            )}
-
-            {/* Blacklist Info */}
-            <View style={styles.staffSection}>
-              <Text style={styles.staffSectionTitle}>Blacklist Statistics</Text>
-              <View style={styles.blacklistStatsCard}>
-                <Text style={styles.blacklistStatsText}>
-                  Total Blacklisted: {blacklistEntries.length}
-                </Text>
-                <Text style={styles.blacklistStatsText}>
-                  Banned IPs: {blacklistEntries.filter(e => e.ip).length}
-                </Text>
-                <Text style={styles.blacklistStatsText}>
-                  Banned MACs: {blacklistEntries.filter(e => e.mac).length}
-                </Text>
-              </View>
-            </View>
-          </ScrollView>
-        </SafeAreaView>
-      </Animated.View>
-    );
-  };
-
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" />
@@ -4777,117 +3116,11 @@ export default function CalculatorApp() {
       {mode === "auth" && renderAuthScreen()}
       {mode === "profile" && renderProfileScreen()}
       {mode === "developer" && renderDeveloperPanel()}
-      {mode === "staff" && renderStaffPanel()}
       {mode === "location" && renderLocationScreen()}
       {mode === "camera" && renderCameraScreen()}
-      {mode === "browser" && renderBrowserScreen()}
       {mode === "phoneDialer" && renderPhoneDialer()}
       {mode === "activeCall" && renderActiveCall()}
-      {mode === "activeVideoCall" && renderVideoCall()}
       {mode === "smsChat" && renderSMSChat()}
-      {mode === "settings" && renderSettingsScreen()}
-      {mode === "music" && renderMusicScreen()}
-      {mode === "crashLogs" && renderCrashLogsScreen()}
-      {![
-        "calculator",
-        "messages",
-        "chat",
-        "videoCall",
-        "info",
-        "profile",
-        "auth",
-        "developer",
-        "staff",
-        "location",
-        "camera",
-        "browser",
-        "phoneDialer",
-        "activeCall",
-        "activeVideoCall",
-        "smsChat",
-        "settings",
-        "music",
-        "crashLogs",
-      ].includes(mode) && renderCalculator()}
-
-      {/* Staff Login Request Modal */}
-      {activeLoginRequest && (
-        <Modal
-          visible={showLoginRequestModal}
-          transparent
-          animationType="fade"
-          onRequestClose={() => denyLoginRequest(activeLoginRequest.id)}
-        >
-          <View style={styles.betaModalOverlay}>
-            <View style={styles.betaModalContent}>
-              <View style={styles.betaModalIcon}>
-                <Lock size={48} color="#FF9F0A" />
-              </View>
-              <Text style={styles.betaModalTitle}>Staff Login Request</Text>
-              <Text style={styles.betaModalText}>
-                A staff member is requesting access to your account.{'\n\n'}
-                If you authorize this, provide them with this code:{'\n\n'}
-                <Text style={{ color: '#34C759', fontSize: 24, fontWeight: 'bold' }}>
-                  {activeLoginRequest.code}
-                </Text>
-                {'\n\n'}This request expires at {activeLoginRequest.expiresAt.toLocaleTimeString()}.
-              </Text>
-              <View style={{ flexDirection: 'row', gap: 12, width: '100%' }}>
-                <TouchableOpacity 
-                  style={[styles.betaModalButton, { flex: 1, backgroundColor: '#FF3B30' }]}
-                  onPress={() => denyLoginRequest(activeLoginRequest.id)}
-                >
-                  <Text style={styles.betaModalButtonText}>Deny</Text>
-                </TouchableOpacity>
-                <TouchableOpacity 
-                  style={[styles.betaModalButton, { flex: 1 }]}
-                  onPress={() => {
-                    Alert.alert(
-                      "Confirm Authorization",
-                      "Are you sure you want to authorize staff access to your account?",
-                      [
-                        { text: "Cancel", style: "cancel" },
-                        { 
-                          text: "Authorize", 
-                          onPress: () => acceptLoginRequest(activeLoginRequest.id, activeLoginRequest.code)
-                        }
-                      ]
-                    );
-                  }}
-                >
-                  <Text style={styles.betaModalButtonText}>Authorize</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          </View>
-        </Modal>
-      )}
-
-      {/* Beta Welcome Modal */}
-      <Modal
-        visible={showBetaWelcome}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setShowBetaWelcome(false)}
-      >
-        <View style={styles.betaModalOverlay}>
-          <View style={styles.betaModalContent}>
-            <View style={styles.betaModalIcon}>
-              <AlertTriangle size={48} color="#FFD700" />
-            </View>
-            <Text style={styles.betaModalTitle}>Welcome to Cruzer Beta! 🚧</Text>
-            <Text style={styles.betaModalText}>
-              App is still in progress and being built. Expect Bugs, Crashes, and other difficulties.{'\n\n'}Issues can be reported in the official Discord server found in app information.{'\n\n'}Thank you for using Cruzer Beta! 💜
-            </Text>
-            <TouchableOpacity 
-              style={styles.betaModalButton}
-              onPress={() => setShowBetaWelcome(false)}
-            >
-              <Text style={styles.betaModalButtonText}>Got it!</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
 
       <Modal
         visible={showContactInfo}
@@ -5019,15 +3252,9 @@ export default function CalculatorApp() {
           onPress={() => setShowMessageActions(false)}
         >
           <View style={styles.actionSheet}>
-            {(() => {
-              const msg = messages.find(m => m.id === longPressedMessage);
-              const editable = !!msg && (Date.now() - msg.timestamp.getTime() <= EDIT_WINDOW_MS);
-              return (
-                <TouchableOpacity style={styles.actionButton} onPress={handleEditMessage} disabled={!editable}>
-                  <Text style={[styles.actionButtonText, !editable && { opacity: 0.5 }]}>Edit{!editable ? ' (expired)' : ''}</Text>
-                </TouchableOpacity>
-              );
-            })()}
+            <TouchableOpacity style={styles.actionButton} onPress={handleEditMessage}>
+              <Text style={styles.actionButtonText}>Edit</Text>
+            </TouchableOpacity>
             <TouchableOpacity style={styles.actionButton} onPress={handleDeleteMessage}>
               <Text style={[styles.actionButtonText, styles.actionButtonTextDanger]}>Delete</Text>
             </TouchableOpacity>
@@ -5417,259 +3644,214 @@ const CalcButton: React.FC<CalcButtonProps> = ({
   );
 };
 
-// Create dynamic styles based on responsive sizing
-const createStyles = () => {
-  const sizes = getResponsiveSizes();
-  
-  return StyleSheet.create({
-    container: {
-      flex: 1,
-      backgroundColor: "#000000",
-    },
-    calculatorContainer: {
-      flex: 1,
-      justifyContent: "flex-end",
-      paddingBottom: 20,
-    },
-    displayContainer: {
-      paddingHorizontal: sizes.paddingHorizontal,
-      paddingVertical: 24,
-      alignItems: "flex-end",
-      minHeight: 100,
-      justifyContent: "flex-end",
-    },
-    displayText: {
-      color: "#FFFFFF",
-      fontSize: sizes.displayFontSize,
-      fontWeight: "300",
-      letterSpacing: -2,
-    },
-    buttonsContainer: {
-      paddingHorizontal: sizes.paddingHorizontal,
-    },
-    buttonRow: {
-      flexDirection: "row",
-      marginBottom: sizes.buttonMargin,
-    },
-    button: {
-      flex: 1,
-      aspectRatio: 1,
-      backgroundColor: "#333333",
-      borderRadius: 100,
-      margin: sizes.buttonMargin,
-      justifyContent: "center",
-      alignItems: "center",
-    },
-    buttonPressed: {
-      opacity: 0.7,
-      transform: [{ scale: 0.95 }],
-    },
-    buttonText: {
-      color: "#FFFFFF",
-      fontSize: sizes.buttonFontSize,
-      fontWeight: "400",
-    },
-    zeroButton: {
-      flex: 2,
-    },
-    functionButton: {
-      backgroundColor: "#A5A5A5",
-    },
-    functionButtonText: {
-      color: "#000000",
-    },
-    operatorButton: {
-      backgroundColor: "#FF9F0A",
-    },
-    operatorButtonText: {
-      color: "#FFFFFF",
-      fontSize: sizes.operatorFontSize,
-    },
-    messagesContainer: {
-      flex: 1,
-      backgroundColor: "#000000",
-    },
-    messagesHeader: {
-      flexDirection: "row",
-      alignItems: "center",
-      justifyContent: "space-between",
-      paddingHorizontal: 16,
-      paddingVertical: 12,
-      borderBottomWidth: 1,
-      borderBottomColor: "#1C1C1E",
-    },
-    messagesTitle: {
-      fontSize: 20,
-      fontWeight: "700",
-      color: "#FFFFFF",
-      textAlign: "center",
-      flex: 1,
-    },
-    cruzerTitle: {
-      fontSize: 24,
-      fontWeight: "900" as const,
-      color: "#00FF00",
-      textAlign: "center" as const,
-      textShadowColor: "#FF0000",
-      textShadowOffset: { width: 2, height: 2 },
-      textShadowRadius: 0,
-      letterSpacing: 4,
-      fontFamily: Platform.OS === "ios" ? "Courier" : "monospace",
-    },
-    messagesHeaderCenter: {
-      flex: 1,
-      alignItems: "center" as const,
-      justifyContent: "center" as const,
-    },
-    phoneNumberText: {
-      fontSize: 11,
-      color: "#8E8E93",
-      marginTop: 2,
-      fontFamily: Platform.OS === "ios" ? "Courier" : "monospace",
-    },
-    panicButton: {
-      width: 44,
-      height: 44,
-      justifyContent: "center",
-      alignItems: "center",
-    },
-    panicEmoji: {
-      fontSize: 24,
-    },
-    panicButtonSmall: {
-      width: 36,
-      height: 44,
-      justifyContent: "center",
-      alignItems: "center",
-      marginRight: 4,
-    },
-    panicEmojiSmall: {
-      fontSize: 20,
-    },
-    chatHeaderLeft: {
-      flexDirection: "row",
-      alignItems: "center",
-    },
-    messagesList: {
-      flex: 1,
-    },
-    searchBarRow: {
-      flexDirection: "row",
-      alignItems: "center",
-      backgroundColor: "#1C1C1E",
-      marginHorizontal: 16,
-      marginTop: 8,
-      marginBottom: 8,
-      paddingHorizontal: 12,
-      borderRadius: 12,
-      gap: 8,
-    },
-    messageItem: {
-      flexDirection: "row",
-      padding: 16,
-      borderBottomWidth: 1,
-      borderBottomColor: "#1C1C1E",
-      alignItems: "center",
-    },
-    skeletonRow: {
-      flexDirection: "row",
-      alignItems: "center",
-      padding: 16,
-      borderBottomWidth: 1,
-      borderBottomColor: "#1C1C1E",
-    },
-    skeletonAvatar: {
-      width: 56,
-      height: 56,
-      borderRadius: 28,
-      backgroundColor: "#1C1C1E",
-      marginRight: 12,
-    },
-    skeletonTextBlock: {
-      flex: 1,
-    },
-    skeletonLineShort: {
-      width: "40%",
-      height: 12,
-      borderRadius: 6,
-      backgroundColor: "#1C1C1E",
-      marginBottom: 8,
-    },
-    skeletonLineLong: {
-      width: "70%",
-      height: 12,
-      borderRadius: 6,
-      backgroundColor: "#1C1C1E",
-    },
-    avatarContainer: {
-      marginRight: 12,
-    },
-    avatar: {
-      width: 56,
-      height: 56,
-      borderRadius: 28,
-      backgroundColor: "#FF2D55",
-      justifyContent: "center",
-      alignItems: "center",
-    },
-    avatarText: {
-      color: "#FFFFFF",
-      fontSize: 24,
-      fontWeight: "600",
-    },
-    messageContent: {
-      flex: 1,
-    },
-    messageHeader: {
-      flexDirection: "row",
-      justifyContent: "space-between",
-      alignItems: "center",
-      marginBottom: 4,
-    },
-    messageName: {
-      fontSize: 17,
-      fontWeight: "600",
-      color: "#FFFFFF",
-    },
-    messageTime: {
-      fontSize: 15,
-      color: "#8E8E93",
-    },
-    messagePreview: {
-      fontSize: 15,
-      color: "#8E8E93",
-      marginTop: 2,
-    },
-    unreadBadge: {
-      backgroundColor: "#007AFF",
-      borderRadius: 12,
-      width: 24,
-      height: 24,
-      justifyContent: "center",
-      alignItems: "center",
-      marginLeft: 8,
-    },
-    unreadText: {
-      color: "#FFFFFF",
-      fontSize: 13,
-      fontWeight: "700",
-    },
-    chatContainer: {
-      flex: 1,
-      backgroundColor: "#000000",
-    },
-    chatKeyboardView: {
-      flex: 1,
-    },
-    chatHeader: {
-      flexDirection: "row",
-      alignItems: "center",
-      justifyContent: "space-between",
-      paddingHorizontal: 8,
-      paddingVertical: 12,
-      borderBottomWidth: 1,
-      borderBottomColor: "#1C1C1E",
-    },
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: "#000000",
+  },
+  calculatorContainer: {
+    flex: 1,
+    justifyContent: "flex-end",
+    paddingBottom: 20,
+  },
+  displayContainer: {
+    paddingHorizontal: 24,
+    paddingVertical: 32,
+    alignItems: "flex-end",
+    minHeight: 120,
+    justifyContent: "flex-end",
+  },
+  displayText: {
+    color: "#FFFFFF",
+    fontSize: 72,
+    fontWeight: "300",
+    letterSpacing: -2,
+  },
+  buttonsContainer: {
+    paddingHorizontal: 12,
+  },
+  buttonRow: {
+    flexDirection: "row",
+    marginBottom: 12,
+  },
+  button: {
+    flex: 1,
+    aspectRatio: 1,
+    backgroundColor: "#333333",
+    borderRadius: 100,
+    margin: 6,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  buttonPressed: {
+    opacity: 0.7,
+    transform: [{ scale: 0.95 }],
+  },
+  buttonText: {
+    color: "#FFFFFF",
+    fontSize: 32,
+    fontWeight: "400",
+  },
+  zeroButton: {
+    flex: 2,
+  },
+  functionButton: {
+    backgroundColor: "#A5A5A5",
+  },
+  functionButtonText: {
+    color: "#000000",
+  },
+  operatorButton: {
+    backgroundColor: "#FF9F0A",
+  },
+  operatorButtonText: {
+    color: "#FFFFFF",
+    fontSize: 40,
+  },
+  messagesContainer: {
+    flex: 1,
+    backgroundColor: "#000000",
+  },
+  messagesHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "#1C1C1E",
+  },
+  messagesTitle: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: "#FFFFFF",
+    textAlign: "center",
+    flex: 1,
+  },
+  cruzerTitle: {
+    fontSize: 24,
+    fontWeight: "900" as const,
+    color: "#00FF00",
+    textAlign: "center" as const,
+    textShadowColor: "#FF0000",
+    textShadowOffset: { width: 2, height: 2 },
+    textShadowRadius: 0,
+    letterSpacing: 4,
+    fontFamily: Platform.OS === "ios" ? "Courier" : "monospace",
+  },
+  messagesHeaderCenter: {
+    flex: 1,
+    alignItems: "center" as const,
+    justifyContent: "center" as const,
+  },
+  phoneNumberText: {
+    fontSize: 11,
+    color: "#8E8E93",
+    marginTop: 2,
+    fontFamily: Platform.OS === "ios" ? "Courier" : "monospace",
+  },
+  panicButton: {
+    width: 44,
+    height: 44,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  panicEmoji: {
+    fontSize: 24,
+  },
+  panicButtonSmall: {
+    width: 36,
+    height: 44,
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 4,
+  },
+  panicEmojiSmall: {
+    fontSize: 20,
+  },
+  chatHeaderLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  messagesList: {
+    flex: 1,
+  },
+  messageItem: {
+    flexDirection: "row",
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: "#1C1C1E",
+    alignItems: "center",
+  },
+  avatarContainer: {
+    marginRight: 12,
+  },
+  avatar: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: "#FF2D55",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  avatarText: {
+    color: "#FFFFFF",
+    fontSize: 24,
+    fontWeight: "600",
+  },
+  messageContent: {
+    flex: 1,
+  },
+  messageHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 4,
+  },
+  messageName: {
+    fontSize: 17,
+    fontWeight: "600",
+    color: "#FFFFFF",
+  },
+  messageTime: {
+    fontSize: 15,
+    color: "#8E8E93",
+  },
+  messagePreview: {
+    fontSize: 15,
+    color: "#8E8E93",
+    marginTop: 2,
+  },
+  unreadBadge: {
+    backgroundColor: "#007AFF",
+    borderRadius: 12,
+    width: 24,
+    height: 24,
+    justifyContent: "center",
+    alignItems: "center",
+    marginLeft: 8,
+  },
+  unreadText: {
+    color: "#FFFFFF",
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  chatContainer: {
+    flex: 1,
+    backgroundColor: "#000000",
+  },
+  chatKeyboardView: {
+    flex: 1,
+  },
+  chatHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 8,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "#1C1C1E",
+  },
   backButton: {
     width: 44,
     height: 44,
@@ -5832,13 +4014,6 @@ const createStyles = () => {
     flex: 1,
     backgroundColor: "#000000",
   },
-  videoCallContent: {
-    flex: 1,
-    backgroundColor: "#000000",
-    justifyContent: "center",
-    alignItems: "center",
-    padding: 24,
-  },
   videoBackButton: {
     position: "absolute",
     top: 8,
@@ -5864,29 +4039,6 @@ const createStyles = () => {
   videoImage: {
     width: "100%",
     height: "100%",
-  },
-  videoCallBadge: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    backgroundColor: "rgba(10, 132, 255, 0.15)",
-    borderWidth: 1,
-    borderColor: "rgba(10, 132, 255, 0.4)",
-    justifyContent: "center",
-    alignItems: "center",
-    marginBottom: 16,
-  },
-  videoCallTitle: {
-    fontSize: 20,
-    fontWeight: "700",
-    color: "#FFFFFF",
-    textAlign: "center",
-  },
-  videoCallSubtitle: {
-    fontSize: 16,
-    color: "#8E8E93",
-    textAlign: "center",
-    marginTop: 8,
   },
   settingsPanel: {
     backgroundColor: "#1C1C1E",
@@ -5986,26 +4138,6 @@ const createStyles = () => {
   messageTimestampLeft: {
     alignSelf: "flex-start" as const,
     marginLeft: 12,
-  },
-  swipeActionLeft: {
-    backgroundColor: "#0a2a0a",
-    justifyContent: "center",
-    alignItems: "center",
-    width: 80,
-    marginVertical: 4,
-    borderRadius: 8,
-  },
-  swipeActionRight: {
-    backgroundColor: "#3a0a0a",
-    justifyContent: "center",
-    alignItems: "center",
-    width: 80,
-    marginVertical: 4,
-    borderRadius: 8,
-  },
-  swipeActionText: {
-    color: "#FFFFFF",
-    fontWeight: "600" as const,
   },
   modalContainer: {
     flex: 1,
@@ -6943,17 +5075,6 @@ const createStyles = () => {
     fontWeight: "700" as const,
     color: "#FFD700",
   },
-  googleBadge: {
-    backgroundColor: "rgba(66, 133, 244, 0.2)",
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
-  },
-  googleBadgeText: {
-    fontSize: 11,
-    fontWeight: "700" as const,
-    color: "#4285F4",
-  },
   expandIndicator: {
     fontSize: 12,
     color: "#8E8E93",
@@ -7087,81 +5208,6 @@ const createStyles = () => {
   },
   bottomNavTextActive: {
     color: "#007AFF",
-  },
-  // Browser styles
-  browserContainer: {
-    flex: 1,
-    backgroundColor: "#000000",
-  },
-  browserHeader: {
-    paddingHorizontal: 12,
-    paddingTop: 8,
-    paddingBottom: 6,
-    borderBottomWidth: 1,
-    borderBottomColor: "#1C1C1E",
-    backgroundColor: "#000000",
-  },
-  browserControls: {
-    flexDirection: "row",
-    gap: 8,
-    marginBottom: 6,
-  },
-  navControl: {
-    paddingVertical: 6,
-    paddingHorizontal: 10,
-    borderRadius: 8,
-    backgroundColor: "#1C1C1E",
-  },
-  navControlDisabled: {
-    opacity: 0.5,
-  },
-  navControlText: {
-    color: "#FFFFFF",
-    fontSize: 12,
-  },
-  addressBarRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    marginBottom: 6,
-  },
-  addressBar: {
-    flex: 1,
-    borderWidth: 1,
-    borderColor: "#1C1C1E",
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    color: "#FFFFFF",
-    backgroundColor: "#0C0C0E",
-  },
-  goButton: {
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    backgroundColor: "#007AFF",
-    borderRadius: 8,
-  },
-  goButtonText: {
-    color: "#FFFFFF",
-    fontWeight: "600",
-  },
-  hotLinksRow: {
-    paddingVertical: 4,
-  },
-  hotLink: {
-    marginRight: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 16,
-    backgroundColor: "#1C1C1E",
-  },
-  hotLinkText: {
-    color: "#FFFFFF",
-    fontSize: 12,
-  },
-  webView: {
-    flex: 1,
-    backgroundColor: "#000000",
   },
   locationContainer: {
     flex: 1,
@@ -7809,668 +5855,4 @@ const createStyles = () => {
   typingDot3: {
     opacity: 0.8,
   },
-  highlightText: {
-    backgroundColor: '#3a3a00',
-    color: '#FFFF99',
-  },
-  chatSearchBarRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#1C1C1E',
-    marginHorizontal: 8,
-    marginTop: 4,
-    marginBottom: 4,
-    paddingHorizontal: 12,
-    borderRadius: 12,
-    gap: 8,
-  },
-  chatSearchNavButton: {
-    paddingHorizontal: 8,
-    paddingVertical: 6,
-    backgroundColor: '#2C2C2E',
-    borderRadius: 8,
-  },
-  chatSearchNavText: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: '600' as const,
-  },
-  chatSearchCount: {
-    color: '#8E8E93',
-    fontSize: 12,
-  },
-  messageStatus: {
-    fontSize: 10,
-    marginTop: -6,
-  },
-  messageStatusSending: {
-    color: '#8E8E93',
-    fontStyle: 'italic',
-  },
-  messageStatusFailed: {
-    color: '#FF3B30',
-    fontWeight: '700' as const,
-  },
-  messageStatusSent: {
-    color: '#4cd964',
-  },
-  // App Settings Button styles
-  appSettingsButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#1C1C1E",
-    borderRadius: 12,
-    padding: 16,
-  },
-  appSettingsButtonText: {
-    flex: 1,
-    color: "#FFFFFF",
-    fontSize: 16,
-    marginLeft: 12,
-  },
-  appSettingsArrow: {
-    color: "#8E8E93",
-    fontSize: 20,
-  },
-  // Settings Screen styles
-  settingsContainer: {
-    flex: 1,
-    backgroundColor: "#000000",
-  },
-  settingsHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingHorizontal: 16,
-    paddingTop: 60,
-    paddingBottom: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: "#1C1C1E",
-  },
-  settingsTitle: {
-    color: "#FFFFFF",
-    fontSize: 24,
-    fontWeight: "bold",
-  },
-  settingsBackButton: {
-    padding: 8,
-  },
-  settingsBackText: {
-    color: "#007AFF",
-    fontSize: 16,
-  },
-  settingsContent: {
-    flex: 1,
-    paddingHorizontal: 16,
-    paddingTop: 20,
-  },
-  settingsSection: {
-    marginBottom: 24,
-  },
-  settingsSectionTitle: {
-    color: "#8E8E93",
-    fontSize: 13,
-    textTransform: "uppercase",
-    marginBottom: 8,
-    marginLeft: 4,
-  },
-  settingsItem: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#1C1C1E",
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 8,
-  },
-  settingsItemText: {
-    flex: 1,
-    color: "#FFFFFF",
-    fontSize: 16,
-    marginLeft: 12,
-  },
-  settingsItemArrow: {
-    color: "#8E8E93",
-    fontSize: 20,
-  },
-  // Music Screen styles
-  musicContainer: {
-    flex: 1,
-    backgroundColor: "#000000",
-  },
-  musicHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingHorizontal: 16,
-    paddingTop: 60,
-    paddingBottom: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: "#1C1C1E",
-  },
-  musicTitle: {
-    color: "#FFFFFF",
-    fontSize: 24,
-    fontWeight: "bold",
-  },
-  musicBackButton: {
-    padding: 8,
-  },
-  musicBackText: {
-    color: "#007AFF",
-    fontSize: 16,
-  },
-  musicContent: {
-    flex: 1,
-    paddingHorizontal: 16,
-  },
-  musicSearchContainer: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#1C1C1E",
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    marginTop: 16,
-    marginBottom: 16,
-  },
-  musicSearchInput: {
-    flex: 1,
-    color: "#FFFFFF",
-    fontSize: 16,
-    paddingVertical: 12,
-    paddingHorizontal: 8,
-  },
-  musicSearchButton: {
-    padding: 8,
-  },
-  musicSection: {
-    marginBottom: 24,
-  },
-  musicSectionTitle: {
-    color: "#8E8E93",
-    fontSize: 13,
-    textTransform: "uppercase",
-    marginBottom: 12,
-    marginLeft: 4,
-  },
-  playlistInfo: {
-    color: "#8E8E93",
-    fontSize: 12,
-    marginLeft: 4,
-    marginBottom: 8,
-  },
-  musicTrack: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#1C1C1E",
-    borderRadius: 12,
-    padding: 12,
-    marginBottom: 8,
-  },
-  musicTrackPlaying: {
-    backgroundColor: "#1a3a1a",
-    borderColor: "#32CD32",
-    borderWidth: 1,
-  },
-  musicTrackInfo: {
-    flex: 1,
-    marginRight: 12,
-  },
-  musicTrackTitle: {
-    color: "#FFFFFF",
-    fontSize: 15,
-    fontWeight: "500",
-    marginBottom: 2,
-  },
-  musicTrackArtist: {
-    color: "#8E8E93",
-    fontSize: 13,
-  },
-  musicTrackDuration: {
-    color: "#8E8E93",
-    fontSize: 12,
-    marginRight: 12,
-  },
-  addToPlaylistButton: {
-    padding: 8,
-    backgroundColor: "#2C2C2E",
-    borderRadius: 8,
-  },
-  addToPlaylistButtonDisabled: {
-    opacity: 0.5,
-  },
-  removeFromPlaylistButton: {
-    padding: 8,
-    backgroundColor: "#3a1a1a",
-    borderRadius: 8,
-  },
-  emptyPlaylist: {
-    alignItems: "center",
-    padding: 32,
-    backgroundColor: "#1C1C1E",
-    borderRadius: 12,
-  },
-  emptyPlaylistText: {
-    color: "#8E8E93",
-    fontSize: 14,
-    textAlign: "center",
-    marginTop: 12,
-  },
-  musicPlayerControls: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "#1C1C1E",
-    borderRadius: 12,
-    padding: 16,
-    marginTop: 16,
-    marginBottom: 24,
-  },
-  musicControlButton: {
-    padding: 12,
-    marginHorizontal: 8,
-  },
-  musicControlButtonMain: {
-    backgroundColor: "#007AFF",
-    borderRadius: 28,
-    width: 56,
-    height: 56,
-    justifyContent: "center",
-    alignItems: "center",
-    marginHorizontal: 16,
-  },
-  nowPlayingText: {
-    color: "#32CD32",
-    fontSize: 13,
-    textAlign: "center",
-    marginBottom: 12,
-  },
-  // Crash Logs Screen styles
-  crashLogsContainer: {
-    flex: 1,
-    backgroundColor: "#000000",
-  },
-  crashLogsHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingHorizontal: 16,
-    paddingTop: 60,
-    paddingBottom: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: "#1C1C1E",
-  },
-  crashLogsTitle: {
-    color: "#FFFFFF",
-    fontSize: 24,
-    fontWeight: "bold",
-  },
-  crashLogsBackButton: {
-    padding: 8,
-  },
-  crashLogsBackText: {
-    color: "#007AFF",
-    fontSize: 16,
-  },
-  crashLogsClearButton: {
-    padding: 8,
-  },
-  crashLogsClearText: {
-    color: "#FF3B30",
-    fontSize: 14,
-  },
-  crashLogsContent: {
-    flex: 1,
-    paddingHorizontal: 16,
-    paddingTop: 16,
-  },
-  crashLogItem: {
-    backgroundColor: "#1C1C1E",
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 12,
-    borderLeftWidth: 4,
-    borderLeftColor: "#FF3B30",
-  },
-  crashLogHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-    marginBottom: 8,
-  },
-  crashLogType: {
-    color: "#FF3B30",
-    fontSize: 14,
-    fontWeight: "bold",
-    textTransform: "uppercase",
-  },
-  crashLogTime: {
-    color: "#8E8E93",
-    fontSize: 12,
-  },
-  crashLogMessage: {
-    color: "#FFFFFF",
-    fontSize: 14,
-    marginBottom: 8,
-  },
-  crashLogStack: {
-    color: "#8E8E93",
-    fontSize: 11,
-    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
-    backgroundColor: "#0D0D0D",
-    padding: 8,
-    borderRadius: 6,
-  },
-  crashLogUser: {
-    color: "#8E8E93",
-    fontSize: 12,
-    marginTop: 8,
-  },
-  emptyCrashLogs: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    paddingVertical: 48,
-  },
-  emptyCrashLogsText: {
-    color: "#8E8E93",
-    fontSize: 16,
-    marginTop: 16,
-  },
-  // Beta Welcome Modal styles
-  betaModalOverlay: {
-    flex: 1,
-    backgroundColor: "rgba(0, 0, 0, 0.8)",
-    justifyContent: "center",
-    alignItems: "center",
-    padding: 24,
-  },
-  betaModalContent: {
-    backgroundColor: "#1C1C1E",
-    borderRadius: 20,
-    padding: 32,
-    width: "100%",
-    maxWidth: 340,
-    alignItems: "center",
-  },
-  betaModalIcon: {
-    marginBottom: 20,
-  },
-  betaModalTitle: {
-    color: "#FFFFFF",
-    fontSize: 24,
-    fontWeight: "bold",
-    textAlign: "center",
-    marginBottom: 16,
-  },
-  betaModalText: {
-    color: "#8E8E93",
-    fontSize: 15,
-    textAlign: "center",
-    lineHeight: 22,
-    marginBottom: 24,
-  },
-  betaModalButton: {
-    backgroundColor: "#007AFF",
-    borderRadius: 12,
-    paddingVertical: 14,
-    paddingHorizontal: 32,
-    width: "100%",
-  },
-  betaModalButtonText: {
-    color: "#FFFFFF",
-    fontSize: 16,
-    fontWeight: "600",
-    textAlign: "center",
-  },
-  // Developer Panel Crash Logs Button
-  devPanelCrashButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#3a1a1a",
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 12,
-  },
-  devPanelCrashButtonText: {
-    color: "#FF3B30",
-    fontSize: 16,
-    fontWeight: "500",
-    marginLeft: 12,
-  },
-  // Staff Panel styles
-  staffContainer: {
-    flex: 1,
-    backgroundColor: "#000000",
-  },
-  staffSafeArea: {
-    flex: 1,
-  },
-  staffHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingHorizontal: 16,
-    paddingTop: 16,
-    paddingBottom: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: "#1C1C1E",
-  },
-  staffTitle: {
-    color: "#FF2D55",
-    fontSize: 24,
-    fontWeight: "bold",
-  },
-  staffBackButton: {
-    padding: 8,
-    width: 40,
-  },
-  staffContent: {
-    flex: 1,
-    paddingHorizontal: 16,
-  },
-  staffSection: {
-    marginTop: 24,
-    marginBottom: 16,
-  },
-  staffSectionTitle: {
-    color: "#8E8E93",
-    fontSize: 13,
-    textTransform: "uppercase",
-    marginBottom: 12,
-    fontWeight: "600",
-  },
-  staffSearchContainer: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#1C1C1E",
-    borderRadius: 12,
-    overflow: "hidden",
-  },
-  staffSearchInput: {
-    flex: 1,
-    color: "#FFFFFF",
-    fontSize: 16,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-  },
-  staffSearchButton: {
-    backgroundColor: "#007AFF",
-    padding: 14,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  flaggedAccountItem: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#1C1C1E",
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 8,
-    borderLeftWidth: 4,
-    borderLeftColor: "#FF3B30",
-  },
-  flaggedAccountInfo: {
-    flex: 1,
-  },
-  flaggedAccountEmail: {
-    color: "#FFFFFF",
-    fontSize: 15,
-    fontWeight: "500",
-    marginBottom: 4,
-  },
-  flaggedAccountName: {
-    color: "#8E8E93",
-    fontSize: 13,
-    marginBottom: 4,
-  },
-  flaggedAccountReason: {
-    color: "#FF3B30",
-    fontSize: 12,
-    fontStyle: "italic",
-  },
-  accountDetailHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 12,
-  },
-  flaggedBadge: {
-    backgroundColor: "#FF3B30",
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 6,
-  },
-  flaggedBadgeText: {
-    color: "#FFFFFF",
-    fontSize: 11,
-    fontWeight: "bold",
-  },
-  accountDetailCard: {
-    backgroundColor: "#1C1C1E",
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 16,
-  },
-  accountDetailRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    paddingVertical: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: "#2C2C2E",
-  },
-  accountDetailLabel: {
-    color: "#8E8E93",
-    fontSize: 14,
-    fontWeight: "500",
-  },
-  accountDetailValue: {
-    color: "#FFFFFF",
-    fontSize: 14,
-    flex: 1,
-    textAlign: "right",
-    marginLeft: 16,
-  },
-  staffActionsContainer: {
-    gap: 12,
-  },
-  staffActionButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "#1C1C1E",
-    borderRadius: 12,
-    padding: 16,
-    gap: 8,
-  },
-  staffActionButtonText: {
-    color: "#007AFF",
-    fontSize: 16,
-    fontWeight: "600",
-  },
-  accountEditCard: {
-    backgroundColor: "#1C1C1E",
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 16,
-  },
-  accountEditLabel: {
-    color: "#8E8E93",
-    fontSize: 13,
-    marginTop: 12,
-    marginBottom: 6,
-    fontWeight: "500",
-  },
-  accountEditInput: {
-    backgroundColor: "#2C2C2E",
-    color: "#FFFFFF",
-    fontSize: 15,
-    padding: 12,
-    borderRadius: 8,
-  },
-  editButtonsContainer: {
-    flexDirection: "row",
-    gap: 12,
-    marginTop: 20,
-  },
-  saveEditButton: {
-    flex: 1,
-    backgroundColor: "#34C759",
-    borderRadius: 12,
-    padding: 16,
-    alignItems: "center",
-  },
-  saveEditButtonText: {
-    color: "#FFFFFF",
-    fontSize: 16,
-    fontWeight: "600",
-  },
-  cancelEditButton: {
-    flex: 1,
-    backgroundColor: "#2C2C2E",
-    borderRadius: 12,
-    padding: 16,
-    alignItems: "center",
-  },
-  cancelEditButtonText: {
-    color: "#8E8E93",
-    fontSize: 16,
-    fontWeight: "600",
-  },
-  loginRequestCard: {
-    backgroundColor: "#1C1C1E",
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 8,
-    borderLeftWidth: 4,
-    borderLeftColor: "#34C759",
-  },
-  loginRequestEmail: {
-    color: "#FFFFFF",
-    fontSize: 15,
-    fontWeight: "500",
-    marginBottom: 6,
-  },
-  loginRequestCode: {
-    color: "#34C759",
-    fontSize: 18,
-    fontWeight: "bold",
-    marginBottom: 4,
-  },
-  loginRequestExpires: {
-    color: "#8E8E93",
-    fontSize: 12,
-  },
-  blacklistStatsCard: {
-    backgroundColor: "#1C1C1E",
-    borderRadius: 12,
-    padding: 16,
-  },
-  blacklistStatsText: {
-    color: "#FFFFFF",
-    fontSize: 15,
-    marginBottom: 8,
-  },
-  });
-};
-
-const styles = createStyles();
+});
